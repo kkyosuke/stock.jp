@@ -7,6 +7,8 @@
 
 本書は「良さそうだから今買う」という裁量を減らし、同じ情報なら同じ行動へ到達するための手順書である。v0.3は未見期間で優位性を確認していないため、最初から候補群上限まで投入しない。1銘柄の初回上限1%は目標額ではなく絶対上限とし、生活資金、納税資金、5年以内に使う予定資金、借入金を運用資産へ含めない。
 
+平日1回の定時実行、日次レポート、注文候補、次回への引き継ぎは[日次自動実行手順書 v0.1](daily-automation-runbook-v0.1.md)に従う。日次タスクへ週次・月次・四半期の期限到来作業をまとめ、同じ銘柄を同じ理由で重複レビューしない。
+
 ## 1. 実資金を入れる前の停止条件
 
 次のうち1つでも未完了なら、判定結果は `WAIT` とし注文を出さない。
@@ -180,7 +182,7 @@
 - 次回レビュー日
 - 手数料、税、スリッページ、見送った場合の反実仮想
 
-保有一覧は[portfolio-register.csv](../operations/templates/portfolio-register.csv)、情勢指数の履歴は[market-regime-log.csv](../operations/templates/market-regime-log.csv)の列を使う。実数値を含むファイルは `operations/private/` へコピーし、テンプレート自体を直接編集しない。
+保有一覧は[portfolio-register.csv](../operations/templates/portfolio-register.csv)、情勢指数の履歴は[market-regime-log.csv](../operations/templates/market-regime-log.csv)の列を使う。日次実行は[daily-report-template.md](../operations/templates/daily-report-template.md)、[order-ticket-template.csv](../operations/templates/order-ticket-template.csv)、[pretrade-check-template.md](../operations/templates/pretrade-check-template.md)を使う。実数値を含むファイルは `operations/private/` へコピーし、テンプレート自体を直接編集しない。
 
 ## 8. 情報源の優先順位
 

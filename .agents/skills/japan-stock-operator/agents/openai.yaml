@@ -1,4 +1,4 @@
 interface:
-  display_name: "日本株運用レビュー"
-  short_description: "日本株の購入・継続・追加・縮小・売却をルールで一貫判定"
-  default_prompt: "Use $japan-stock-operator to review this Japanese stock and produce a rule-based decision log."
+  display_name: "日本株日次運用"
+  short_description: "日次監視、期限レビュー、注文候補、引き継ぎを一括実行"
+  default_prompt: "Use $japan-stock-operator to run today’s Japanese-stock operation, resume the private handoff state, and save the report and proposed order tickets."

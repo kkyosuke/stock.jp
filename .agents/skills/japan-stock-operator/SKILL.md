@@ -1,6 +1,6 @@
 ---
 name: japan-stock-operator
-description: Review Japanese stocks under this repository's frozen tenbagger rules and produce auditable BUY, WATCH, WAIT, KEEP, ADD, REDUCE, SELL, or NO-ACTION decisions. Use for live purchase timing, pre-order checks, daily disclosure monitoring, weekly or monthly reviews, quarterly progress reviews, market-regime sizing, exit checks, and creation or updating of operation decision logs for Japanese equities.
+description: Run and resume daily Japanese-stock operations or review individual stocks under this repository's frozen tenbagger rules. Produce auditable BUY, WATCH, WAIT, KEEP, ADD, REDUCE, SELL, or NO-ACTION decisions, durable handoff state, daily reports, and proposed order tickets. Use for scheduled daily runs, live purchase timing, pre-order checks, disclosure monitoring, weekly or monthly reviews, quarterly progress reviews, market-regime sizing, exit checks, and operation logs.
 ---
 
 # Japan Stock Operator
@@ -17,8 +17,11 @@ From the repository root, read these files before judging a stock:
 
 Read [references/review-checklists.md](references/review-checklists.md) for the checklist matching the requested review mode. Treat the canonical documents as authoritative if this skill conflicts with them.
 
-## Choose one review mode
+For a scheduled run, “today's run,” or a request to execute all due operations, also read [references/daily-run.md](references/daily-run.md) and `docs/daily-automation-runbook-v0.1.md`.
 
+## Choose a review mode
+
+- `daily-run`: resume durable state, execute the daily event check and all due periodic modes, save one report and handoff
 - `new-entry`: full gate, score, reverse-tenbagger, liquidity, regime, and order-plan review
 - `daily-event`: check new official disclosures and immediate `S-A` triggers only
 - `weekly`: check missed disclosures, liquidity, concentration, upcoming reviews, and a provisional regime snapshot; normally return `NO-ACTION`
@@ -26,7 +29,7 @@ Read [references/review-checklists.md](references/review-checklists.md) for the 
 - `quarterly`: fully rescore company progress and decide `KEEP`, `ADD`, `REDUCE`, or `SELL`
 - `ad-hoc`: evaluate a specified public event without inventing a general review
 
-If the user does not identify the mode, infer it from the request and state the chosen mode.
+If the user asks for “today's run” or all necessary operations, choose `daily-run`. Otherwise infer the narrowest applicable mode and state it.
 
 ## Establish the information cutoff
 
@@ -79,6 +82,8 @@ Generate a private draft when a concrete company is under review:
 ```
 
 Fill every applicable field. Store exact quantities, wealth, tax, and account details only under ignored `operations/private/`. Never expose account numbers, credentials, personal identifiers, or total personal assets in chat or tracked files.
+
+In `daily-run` mode, prepare or resume the date folder with `scripts/daily_operation.py`. Do not create one decision log per unchanged holding. Create detailed logs only for an actionable decision or a due periodic review, and summarize all other coverage in the daily report. Never mark a proposed order as submitted or filled without user-provided execution evidence.
 
 ## Return a fixed summary
 
