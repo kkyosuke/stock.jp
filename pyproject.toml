@@ -1,0 +1,8 @@
+[project]
+name = "stock-jp-research"
+version = "0.1.0"
+description = "Reproducible research utilities for Japanese tenbagger analysis"
+requires-python = ">=3.11"
+dependencies = [
+  "xlrd==2.0.2",
+]
