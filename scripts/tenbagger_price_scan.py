@@ -188,6 +188,10 @@ def parse_prices(payload: dict[str, Any]) -> list[Price]:
         if close is None or close <= 0:
             continue
         volume = volumes[index] if index < len(volumes) else None
+        # Yahoo may emit zero-volume weekday placeholders on TSE holidays with
+        # the previous close carried forward. They are not executable sessions.
+        if volume is not None and volume <= 0:
+            continue
         prices.append(
             Price(
                 day=datetime.fromtimestamp(timestamp, exchange_timezone).date(),

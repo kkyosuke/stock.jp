@@ -6,10 +6,36 @@ from scripts.tenbagger_price_scan import (
     data_quality_flags,
     earliest_episode,
     month_ends,
+    parse_prices,
 )
 
 
 class TenbaggerPriceScanTest(unittest.TestCase):
+    def test_omits_zero_volume_holiday_placeholders(self) -> None:
+        payload = {
+            "chart": {
+                "result": [
+                    {
+                        "timestamp": [1577833200, 1578006000],
+                        "meta": {"exchangeTimezoneName": "Asia/Tokyo"},
+                        "indicators": {
+                            "quote": [
+                                {
+                                    "close": [100.0, 101.0],
+                                    "volume": [0, 1000],
+                                }
+                            ]
+                        },
+                    }
+                ]
+            }
+        }
+
+        prices = parse_prices(payload)
+
+        self.assertEqual(len(prices), 1)
+        self.assertEqual(prices[0].close, 101.0)
+
     def test_uses_next_close_and_records_the_later_collapse(self) -> None:
         daily = [
             Price(date(2020, 1, 31), 8.0, 100),
