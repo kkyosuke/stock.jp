@@ -1,0 +1,13 @@
+{
+  "schema_version": "1.0",
+  "timezone": "Asia/Tokyo",
+  "schedule": "weekdays 18:30",
+  "last_successful_run_at_jst": null,
+  "last_disclosure_cutoff_jst": null,
+  "last_price_date": null,
+  "last_run_id": null,
+  "pending_reviews": [],
+  "pending_orders": [],
+  "data_gaps": [],
+  "next_run_at_jst": null
+}
