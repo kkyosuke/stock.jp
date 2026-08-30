@@ -1,5 +1,11 @@
 # stock.jp
 
+## Live operations
+
+- [日本株テンバガー実運用手順書 v0.1](docs/live-operation-playbook-v0.1.md) — 注文、監視、情勢指数、購入・継続・追加・縮小・売却の手順
+- [日本株運用レビュースキル](.agents/skills/japan-stock-operator/SKILL.md) — 同じ判定とログ作成をCodexで再現
+- [運用ログ用テンプレート](operations/templates/decision-log-template.md) — 個人情報を含む実ログは `operations/private/` に保存
+
 ## Research rules
 
 - [日本株テンバガー判定・運用ルール v0.3](docs/tenbagger-rule-v0.3.md) — 5倍時の原資回収と候補がある場合だけの再配分を含む凍結済みチャレンジャー
