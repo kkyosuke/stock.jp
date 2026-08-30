@@ -15,12 +15,20 @@ class RuleV03Test(unittest.TestCase):
     def test_price_rule_set_is_small_and_complete(self) -> None:
         found = set(re.findall(r"`(V3-P\d)`", self.text))
 
-        self.assertEqual(found, {f"V3-P{number}" for number in range(1, 6)})
+        self.assertEqual(found, {f"V3-P{number}" for number in range(1, 7)})
 
     def test_v03_has_no_new_numeric_thresholds(self) -> None:
         self.assertIn("新しい数値閾値は追加せず", self.text)
-        self.assertIn("v0.2の12条件からv0.3の5条件へ減り", self.text)
-        self.assertIn("売買条件は4条件", self.text)
+        self.assertIn("v0.2の12条件からv0.3の6条件へ減り", self.text)
+        self.assertIn("売買条件は5条件", self.text)
+
+    def test_recovered_capital_is_not_assumed_to_be_reinvested(self) -> None:
+        for phrase in (
+            "合格銘柄がなければ現金のまま保有",
+            "回収から再投資までの日数",
+            "再投資できた場合だけ再配分の効果として計上",
+        ):
+            self.assertIn(phrase, self.text)
 
     def test_holdout_contract_is_explicit(self) -> None:
         for phrase in (

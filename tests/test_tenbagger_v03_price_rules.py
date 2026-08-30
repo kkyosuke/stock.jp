@@ -20,7 +20,7 @@ def make_prices(days: list[date], close_for_day) -> list[Price]:
 
 
 class TenbaggerV03PriceRulesTest(unittest.TestCase):
-    def test_fifty_percent_drop_and_five_x_are_not_sell_triggers(self) -> None:
+    def test_drop_only_reviews_and_five_x_then_ten_x_take_profits(self) -> None:
         days = weekdays(date(2020, 1, 2), date(2021, 4, 5))
 
         def close(day: date) -> float:
@@ -39,8 +39,14 @@ class TenbaggerV03PriceRulesTest(unittest.TestCase):
         )
 
         self.assertGreater(len(result.review_days), 0)
-        self.assertEqual([trade.rule for trade in result.trades], ["V3-P3"])
-        self.assertEqual(result.trades[0].fraction_of_q0, 0.5)
+        self.assertEqual(
+            [trade.rule for trade in result.trades],
+            ["V3-P3", "V3-P4"],
+        )
+        self.assertEqual(
+            [trade.fraction_of_q0 for trade in result.trades],
+            [0.2, 0.3],
+        )
         self.assertEqual(result.remaining_fraction, 0.5)
 
     def test_post_ten_x_drawdown_sells_the_remaining_half(self) -> None:
@@ -61,11 +67,11 @@ class TenbaggerV03PriceRulesTest(unittest.TestCase):
 
         self.assertEqual(
             [trade.rule for trade in result.trades],
-            ["V3-P3", "V3-P4"],
+            ["V3-P3", "V3-P4", "V3-P5"],
         )
         self.assertEqual(
             [trade.fraction_of_q0 for trade in result.trades],
-            [0.5, 0.5],
+            [0.2, 0.3, 0.5],
         )
         self.assertEqual(result.remaining_fraction, 0)
 

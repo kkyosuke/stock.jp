@@ -1,7 +1,7 @@
 """Executable price-rule core for the frozen v0.3 challenger.
 
 The module intentionally has no parameter search or historical optimization.
-It exists to make V3-P1 through V3-P4 mechanically testable. V3-P5 needs a
+It exists to make V3-P1 through V3-P5 mechanically testable. V3-P6 needs a
 time-series portfolio and is outside a single-position simulation.
 """
 
@@ -34,7 +34,7 @@ def simulate_v03_price_rules(
     entry_price: float,
     prices: list[Price],
 ) -> V03PriceResult:
-    """Apply V3-P1 to V3-P4 to one position with Q0 normalized to one."""
+    """Apply V3-P1 to V3-P5 to one position with Q0 normalized to one."""
 
     stock_days = [price.day for price in prices]
     entry_index = bisect.bisect_left(stock_days, entry_day)
@@ -54,6 +54,7 @@ def simulate_v03_price_rules(
     pending_rule = ""
     tenx_reached = False
     p3_done = False
+    p4_done = False
     highest_ma20: float | None = None
 
     def execute(rule: str, trigger_index: int, requested_fraction: float) -> bool:
@@ -111,13 +112,25 @@ def simulate_v03_price_rules(
             and drawdown20 is not None
             and drawdown20 <= -0.5
         ):
-            if execute("V3-P4", index, remaining):
+            if execute("V3-P5", index, remaining):
                 break
             continue
 
-        if tenx_reached and not p3_done:
-            if execute("V3-P3", index, 0.5):
+        pending_rules: list[str] = []
+        if is_month_end and price.close >= 5 * entry_price and not p3_done:
+            if execute("V3-P3", index, 0.2):
                 p3_done = True
+            else:
+                pending_rules.append("V3-P3")
+
+        if is_month_end and price.close >= 10 * entry_price and not p4_done:
+            if execute("V3-P4", index, 0.3):
+                p4_done = True
+            else:
+                pending_rules.append("V3-P4")
+
+        if pending_rules:
+            pending_rule = "+".join(pending_rules)
 
     return V03PriceResult(
         trades=tuple(trades),
