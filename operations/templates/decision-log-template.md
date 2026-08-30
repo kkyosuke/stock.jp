@@ -5,7 +5,10 @@
 - 判断ID: `{{DECISION_ID}}`
 - 評価日: `{{DATE}}`
 - 情報カットオフ: `YYYY-MM-DD HH:MM JST`
-- モード: `{{MODE}}`
+- レビューモード: `{{MODE}}`
+- 運用モード: `PAPER / LIVE / PAUSED`
+- 適用ルール版:
+- シャドー比較版:
 - 証券コード: `{{CODE}}`
 - 会社名: `{{COMPANY}}`
 - 担当者: `human / Codex下書き＋human確認`
@@ -49,6 +52,7 @@
 
 ## 注文計画
 
+- 注文票状態: `PAPER_PROPOSED / PROPOSED / 注文なし`
 - 注文日:
 - 売買区分:
 - 注文種別: `当日限り指値 / 分割指値 / 注文なし`

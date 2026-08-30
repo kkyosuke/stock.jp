@@ -43,7 +43,7 @@ Return `NO-ACTION` for ordinary price movement without an event rule.
 - Freeze the information cutoff at the final trading close.
 - Re-screen the point-in-time eligible universe.
 - Update entry multiple, MA20, highest MA20, DD20, 3-year deadline, and position concentration.
-- Apply v0.3 P-rules once and in their documented priority.
+- Apply the active rule version's price/time rules once in their documented priority, and record v0.3 separately when it is only a shadow challenger.
 - Calculate formal `MRS-v0.1` from the same month-end date.
 - Prepare next-business-day limit orders only after the pre-order disclosure check.
 

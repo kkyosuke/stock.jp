@@ -12,8 +12,9 @@ Apply the repository's frozen rules to current public information. Produce a rev
 From the repository root, read these files before judging a stock:
 
 1. `docs/live-operation-playbook-v0.1.md`
-2. `docs/tenbagger-rule-v0.3.md`
-3. Only the relevant inherited sections of `docs/tenbagger-rule-v0.2.md`
+2. `docs/operation-governance-v0.1.md`
+3. `docs/tenbagger-rule-v0.2.md`
+4. `docs/tenbagger-rule-v0.3.md` for shadow comparison or after explicit promotion
 
 Read [references/review-checklists.md](references/review-checklists.md) for the checklist matching the requested review mode. Treat the canonical documents as authoritative if this skill conflicts with them.
 
@@ -25,7 +26,7 @@ For a scheduled run, “today's run,” or a request to execute all due operatio
 - `new-entry`: full gate, score, reverse-tenbagger, liquidity, regime, and order-plan review
 - `daily-event`: check new official disclosures and immediate `S-A` triggers only
 - `weekly`: check missed disclosures, liquidity, concentration, upcoming reviews, and a provisional regime snapshot; normally return `NO-ACTION`
-- `monthly`: run candidate selection, v0.3 price/time rules, concentration, formal regime score, and next-day order planning
+- `monthly`: run candidate selection, the active rule version's price/time rules, shadow comparison, concentration, formal regime score, and next-day order planning
 - `quarterly`: fully rescore company progress and decide `KEEP`, `ADD`, `REDUCE`, or `SELL`
 - `ad-hoc`: evaluate a specified public event without inventing a general review
 
@@ -52,10 +53,12 @@ Do not use narrative confidence as a substitute for a missing rule input.
 
 ## Apply decisions in order
 
+Read `operations/private/operation-policy.json` before creating an order ticket. In `PAPER`, use v0.2 for the operational decision, evaluate v0.3 only as a labeled shadow counterfactual, and keep every ticket `PAPER_PROPOSED`. Never treat v0.3 as live merely because its price rules are simpler. In `PAUSED`, create no order ticket. In `LIVE`, still keep brokerage submission human-only.
+
 1. Check all immediate `S-A` exit rules.
 2. Check quarterly `S-B` reduction and exit rules when applicable.
-3. Check v0.3 price/time full exits.
-4. Check v0.3 5x and 10x partial profit-taking.
+3. Apply the active rule version's price, time, and partial-profit rules in its documented priority.
+4. Record each shadow version's different action as a counterfactual; never execute it.
 5. Check concentration reduction.
 6. For new or additional purchases, calculate `MRS-v0.1` and apply its entry multiplier.
 7. Apply liquidity, lot-size, position, industry, candidate-pool, and maximum-holdings caps.

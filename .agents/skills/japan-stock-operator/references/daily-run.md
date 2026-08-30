@@ -4,7 +4,7 @@ Use this workflow when the request is “today's run,” a scheduled operation, 
 
 ## Prepare or resume
 
-1. Read `docs/daily-automation-runbook-v0.1.md` and the canonical rule files named in `SKILL.md`.
+1. Read `docs/daily-automation-runbook-v0.1.md`, `operations/private/operation-policy.json`, and the canonical rule files named in `SKILL.md`.
 2. Run `scripts/daily_operation.py prepare --at <current aware JST timestamp>`.
 3. Read the returned run paths, `operations/private/state.json`, the previous run's `handoff.json` when present, `portfolio-register.csv`, and `watchlist.csv`.
 4. If the returned run status is already `completed`, report that the date was already closed. Do not create duplicate orders.
@@ -30,7 +30,7 @@ Update the current run's:
 
 - `report.md` with coverage, exceptions, decisions, due reviews, data gaps, human actions, and the next run
 - `sources.csv` with publication time, retrieval time, URL, and whether it is a primary source
-- `orders.csv` only for actionable next-session proposals; keep status `PROPOSED`
+- `orders.csv` only for actionable next-session proposals; use the policy-derived status (`PAPER_PROPOSED` in `PAPER`, `PROPOSED` only in an approved `LIVE` mode)
 - `pretrade-check.md` with the target trade date when an order is proposed
 - individual decision logs only for an actionable decision or a due periodic review
 - `handoff.json` with `pending_reviews`, `pending_orders`, `data_gaps`, and `next_run_at_jst`
