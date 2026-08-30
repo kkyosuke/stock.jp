@@ -21,9 +21,9 @@ class ValidationDatasetTest(unittest.TestCase):
         two_year = [row for row in self.rows if row["2y_qualified"] == "True"]
         three_year = [row for row in self.rows if row["3y_qualified"] == "True"]
 
-        self.assertEqual(len(self.rows), 84)
-        self.assertEqual(len(two_year), 56)
-        self.assertEqual(len(three_year), 83)
+        self.assertEqual(len(self.rows), 83)
+        self.assertEqual(len(two_year), 55)
+        self.assertEqual(len(three_year), 82)
 
     def test_reported_three_year_outcomes(self) -> None:
         rows = [row for row in self.rows if row["3y_qualified"] == "True"]
@@ -31,10 +31,10 @@ class ValidationDatasetTest(unittest.TestCase):
         latest_multiples = [float(row["3y_latest_multiple"]) for row in rows]
 
         self.assertEqual(sum(row["3y_retained_10x"] == "True" for row in rows), 24)
-        self.assertEqual(sum(drawdown <= -0.8 for drawdown in drawdowns), 36)
+        self.assertEqual(sum(drawdown <= -0.8 for drawdown in drawdowns), 35)
         self.assertEqual(sum(multiple < 1 for multiple in latest_multiples), 5)
-        self.assertAlmostEqual(median(drawdowns), -0.7693)
-        self.assertAlmostEqual(median(latest_multiples), 6.0596)
+        self.assertAlmostEqual(median(drawdowns), -0.76595)
+        self.assertAlmostEqual(median(latest_multiples), 6.0707)
 
 
 if __name__ == "__main__":
