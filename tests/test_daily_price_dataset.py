@@ -2,14 +2,56 @@ import csv
 import hashlib
 import json
 from pathlib import Path
+import sys
 import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data/daily-prices"
+sys.path.insert(0, str(ROOT))
+
+from scripts.validate_daily_price_archive import validate_archive  # noqa: E402
 
 
 class DailyPriceDatasetTest(unittest.TestCase):
+    def test_tracked_archive_matches_historical_coverage(self) -> None:
+        coverage = json.loads(
+            (ROOT / "data/historical-replay/price-coverage-2025-2026.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        archive = validate_archive(DATA, source_label="tracked daily prices")
+        actual_by_date = {item["date"]: item for item in archive["sessions"]}
+
+        self.assertTrue(coverage["source"]["row_data_committed"])
+        self.assertEqual(coverage["source"]["tracked_archive"], "data/daily-prices/")
+        for expected in coverage["sessions"]:
+            actual = actual_by_date[expected["date"]]
+            self.assertEqual(actual, expected)
+
+        acquired = coverage["acquired_official_price_period"]
+        official_sessions = [
+            item
+            for item in archive["sessions"]
+            if acquired["from"] <= item["date"] <= acquired["through"]
+        ]
+        self.assertEqual(len(official_sessions), acquired["session_count"])
+        self.assertEqual(
+            sum(item["row_count"] for item in official_sessions), acquired["row_count"]
+        )
+        self.assertEqual(
+            sum(item["quote_count"] for item in official_sessions),
+            acquired["quote_count"],
+        )
+        self.assertEqual(
+            sum(item["no_quote_count"] for item in official_sessions),
+            acquired["no_quote_count"],
+        )
+        self.assertEqual(
+            sum(item["fetch_error_count"] for item in official_sessions),
+            acquired["fetch_error_count"],
+        )
+
     def test_latest_manifest_matches_latest_csv(self) -> None:
         manifest = json.loads((DATA / "latest.json").read_text(encoding="utf-8"))
         latest = manifest["latest_session"]

@@ -1,10 +1,10 @@
 # 履歴日足アーカイブ仕様 v0.1
 
 - 発効日: 2026年8月31日
-- 保存先: Git管理外の`operations/private/historical-replay/daily-prices/`
+- 保存先: Git管理下の`data/daily-prices/`
 - CSV契約: PR #14の`data/daily-prices/`と同一
 - 用途: 2025–2026年ルール履歴再生、欠損監査
-- 禁止: 株探スクレイピング、推測補完、認証情報や契約データの公開Git追加
+- 禁止: 株探スクレイピング、推測補完、認証情報や取得元の生レスポンスのGit追加
 
 ## 1. 保存形式
 
@@ -25,7 +25,7 @@
 - `前日比`: 同一銘柄の直前取引日終値との差
 - `前日比％`: `前日比 / 直前取引日終値 × 100`
 
-期間の先頭、上場初日、直前終値を確定できない日は、`OK`でも前日比2列を空欄にできる。株式分割・併合をまたぐ損益再生では、表示用の未調整OHLCだけを使わず、privateに保存した調整係数とコーポレートアクション証跡を併用する。
+期間の先頭、上場初日、直前終値を確定できない日は、`OK`でも前日比2列を空欄にできる。株式分割・併合をまたぐ損益再生では、Git管理する表示用の未調整OHLCだけを使わず、privateに保存した調整係数とコーポレートアクション証跡を併用する。
 
 バックテスト用の補助データは`operations/private/historical-replay/supplemental/`へ分離する。
 
@@ -38,18 +38,19 @@
 取得元固有の一時コードを残さず、次の共通検証器でアーカイブを確認する。
 
 ```bash
+mkdir -p .cache
 .venv/bin/python scripts/validate_daily_price_archive.py \
-  --archive operations/private/historical-replay/daily-prices \
-  --manifest operations/private/historical-replay/daily-price-manifest.json \
+  --archive data/daily-prices \
+  --manifest .cache/daily-price-manifest.json \
   --source-label 'licensed first-party historical source'
 ```
 
-検証器は全CSVについて、列順、ファイル名と日付、銘柄コード重複、取得状態、数値、OHLC、出来高、SHA-256を確認する。公開可能な件数・期間・ハッシュだけを`data/historical-replay/price-coverage-2025-2026.json`へ複製し、契約データの行自体はPRへ含めない。
+検証器は全CSVについて、列順、ファイル名と日付、銘柄コード重複、取得状態、数値、OHLC、出来高、SHA-256を確認する。履歴系列の日別件数・期間・ハッシュは`data/historical-replay/price-coverage-2025-2026.json`に固定し、CIでGit追跡CSVとの一致を検証する。
 
-`operations/private/`はGit管理外なので、セッションworktreeを削除する前に利用者管理の暗号化ストレージへバックアップする。PRのマージだけではprivateアーカイブは別worktreeや別端末へ複製されない。
+認証情報、取得元の生レスポンス、調整後株価、時価総額、コーポレートアクション補助表は`operations/private/`に残し、Gitへ追加しない。必要ならセッションworktreeを削除する前に利用者管理の暗号化ストレージへバックアップする。PRのマージで復元できるのは`data/daily-prices/`の正規化済み日足だけである。
 
 ## 4. PR #14データとの境界
 
-`data/daily-prices/`はPR #14が作る現行銘柄中心の候補探索データであり、履歴再生のpoint-in-time母集団とは混ぜない。列契約は共通でも、取得元、対象母集団、公式性、調整方法が異なるため、マニフェストと保存ルートを分ける。
+`data/daily-prices/`にはPR #14が作る現行銘柄中心の候補探索データと、履歴再生用のpoint-in-time母集団を同じ列契約で保存する。保存ルートは共通でも取得元、対象母集団、公式性、調整方法は異なるため、`latest.json`は継続収集系列、`data/historical-replay/price-coverage-2025-2026.json`は履歴系列の監査情報として分離する。履歴再生時に両系列を無条件で連結しない。
 
 不足期間を別の取得元で補う場合は、日付ごとの取得元と公式性をマニフェストへ明記し、重複日は優先順位を事前固定する。株探による補完は行わない。

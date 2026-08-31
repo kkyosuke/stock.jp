@@ -9,7 +9,7 @@
 
 ## 1. 結論
 
-PR #14と同じ日付別CSV契約で、契約範囲の公式日足をprivateへ移植した。2025年は243営業日・960,298行、2026年は1月5日〜6月8日の103営業日・404,782行である。全期間の486営業日・1,918,292行は、列順、日付、コード重複、取得状態、OHLC、出来高、SHA-256の検証に合格した。
+PR #14と同じ日付別CSV契約で、契約範囲の公式日足を`data/daily-prices/`へ移植しGit管理した。2025年は243営業日・960,298行、2026年は1月5日〜6月8日の103営業日・404,782行である。先行期間を含む486営業日・1,918,292行は、列順、日付、コード重複、取得状態、OHLC、出来高、SHA-256の検証に合格した。
 
 ただし、2026年6月9日〜8月31日の公式point-in-time価格、財務詳細、完全希薄化後株式数、当時の開示時刻、SAM/SOM、競合比較、TOPIXが不足する。したがって、入口ハードゲートと100点スコアを再生できず、2025年・2026年の銘柄別・合計損益はまだ算定しない。価格だけで0件売買または成功銘柄だけの損益を作り、PAPER承認の根拠にはしない。
 
@@ -23,9 +23,8 @@ PR #14と同じ日付別CSV契約で、契約範囲の公式日足をprivateへ�
 
 ### PR #14互換の日足
 
-- private正本: `operations/private/historical-replay/daily-prices/YYYY/YYYY-MM-DD.csv`
-- private検証マニフェスト: `operations/private/historical-replay/daily-price-manifest.json`
-- 公開カバレッジ: [`data/historical-replay/price-coverage-2025-2026.json`](../data/historical-replay/price-coverage-2025-2026.json)
+- Git正本: [`data/daily-prices/YYYY/YYYY-MM-DD.csv`](../data/daily-prices/)
+- 履歴カバレッジ: [`data/historical-replay/price-coverage-2025-2026.json`](../data/historical-replay/price-coverage-2025-2026.json)
 - 先行期間を含む取得範囲: 2024年6月10日〜2026年6月8日
 - 営業日数: 486
 - 内国株行数: 1,918,292
@@ -50,7 +49,7 @@ CSV列は次で固定した。
 | `supplemental/market-cap-daily.csv.gz` | 1,834,451 | 日次時価総額、単位は百万円 | `fa51ec2dcbf813f4360f7d15414946a5ba37ae9e755a1a4bae5f695928a94cfc` |
 | `supplemental/corporate-actions.csv.gz` | 486 | 権利落種類と調整係数 | `f2ae08297bb3ff741727173b91bb3094f2b0a13375ddd9ce224eb506f15a1101` |
 
-契約データの行自体は公開リポジトリへ追加しない。公開JSONには期間、件数、欠損、privateファイルのハッシュだけを置く。`operations/private/`はGit管理外なので、このsession worktreeを削除する前に利用者管理の暗号化ストレージへバックアップする。
+正規化済みの日付別株価CSVはGitへ追加し、履歴カバレッジJSONの日別SHA-256で同一性を固定する。認証情報、取得元の生レスポンス、調整後株価、日次時価総額、コーポレートアクション補助表は公開リポジトリへ追加しない。これらprivate補助データが必要なら、このsession worktreeを削除する前に利用者管理の暗号化ストレージへバックアップする。
 
 ## 3. 取得能力と不足
 
