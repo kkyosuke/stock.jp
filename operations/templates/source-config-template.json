@@ -8,7 +8,8 @@
     "api_key_env": "JQUANTS_API_KEY",
     "tdnet_enabled": true,
     "financial_summary_enabled": true,
-    "daily_bars_enabled": true
+    "daily_bars_enabled": true,
+    "market_calendar_enabled": true
   },
   "edinet": {
     "enabled": true,

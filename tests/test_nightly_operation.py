@@ -1,0 +1,277 @@
+import csv
+import json
+from pathlib import Path
+import shutil
+from tempfile import TemporaryDirectory
+import unittest
+
+from scripts.nightly_artifacts import validate_nightly_artifacts
+from scripts.nightly_operation import finalize_nightly_run, start_nightly_run
+from scripts.operation_state import PROJECT_ROOT, initialize_or_migrate_workspace
+from scripts.order_ticket import propose_order
+
+
+FIXTURES = PROJECT_ROOT / "tests/fixtures/official-source-scan"
+
+
+class NightlyOperationTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        (self.root / "operations").mkdir()
+        shutil.copytree(
+            PROJECT_ROOT / "operations/templates", self.root / "operations/templates"
+        )
+        initialize_or_migrate_workspace(self.root)
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def _add_holding(self, code: str = "1234") -> None:
+        path = self.root / "operations/private/portfolio-register.csv"
+        with path.open(encoding="utf-8", newline="") as source:
+            fields = next(csv.reader(source))
+        row = dict.fromkeys(fields, "")
+        row.update({"code": code, "company": "Example", "status": "OPEN"})
+        with path.open("a", encoding="utf-8", newline="") as destination:
+            csv.DictWriter(destination, fieldnames=fields).writerow(row)
+
+    def _start(self) -> dict[str, object]:
+        return start_nightly_run(
+            at="2026-08-31T18:45:00+09:00",
+            cutoff="2026-08-31T18:30:00+09:00",
+            fixture_dir=FIXTURES,
+            root=self.root,
+        )
+
+    def _complete_research_queue(self, run_dir: Path) -> None:
+        path = run_dir / "research-queue.json"
+        queue = json.loads(path.read_text(encoding="utf-8"))
+        for task in queue["tasks"]:
+            task["status"] = "COMPLETED"
+            task["evidence_source_ids"] = task["source_ids"] or ["manual-jpx"]
+        path.write_text(
+            json.dumps(queue, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+
+    def test_start_confirms_next_trade_date_and_builds_due_work(self) -> None:
+        self._add_holding()
+        result = self._start()
+        run_dir = self.root / str(result["run_dir"])
+        plan = json.loads((run_dir / "work-plan.json").read_text(encoding="utf-8"))
+        with (run_dir / "next-day-actions.csv").open(
+            encoding="utf-8", newline=""
+        ) as source:
+            actions = list(csv.DictReader(source))
+
+        self.assertEqual(result["source_scan_status"], "COMPLETED")
+        self.assertTrue(result["trading_calendar_confirmed"])
+        self.assertEqual(result["next_trading_date"], "2026-09-01")
+        self.assertIn("2026-08-31-daily-event", result["due_task_ids"])
+        self.assertEqual(actions[0]["code"], "1234")
+        self.assertEqual(actions[0]["trade_date"], "2026-09-01")
+        self.assertEqual(plan["status"], "IN_PROGRESS")
+
+    def test_paper_proposal_updates_action_handoff_and_trade_ledger_once(self) -> None:
+        self._add_holding()
+        started = self._start()
+        run_dir = self.root / str(started["run_dir"])
+        self._complete_research_queue(run_dir)
+        actions_path = run_dir / "next-day-actions.csv"
+        with actions_path.open(encoding="utf-8", newline="") as source:
+            reader = csv.DictReader(source)
+            fields = list(reader.fieldnames or [])
+            actions = list(reader)
+        actions[0].update(
+            {
+                "next_action": "BUY",
+                "rule_ids": "E-1;E-2",
+                "trigger_condition": "全エントリー条件を充足",
+                "evidence_source_ids": "tdnet-20260831000001",
+            }
+        )
+        with actions_path.open("w", encoding="utf-8", newline="") as destination:
+            writer = csv.DictWriter(destination, fieldnames=fields)
+            writer.writeheader()
+            writer.writerows(actions)
+
+        args = {
+            "run_id": "2026-08-31",
+            "run_token": str(started["run_token"]),
+            "action_id": "2026-08-31-1234-next",
+            "code": "1234",
+            "company": "Example",
+            "side": "BUY",
+            "action": "BUY",
+            "rule_ids": "E-1;E-2",
+            "trade_date": "2026-09-01",
+            "limit_price": "1000",
+            "quantity": "100",
+            "position_pct": "1.0",
+            "valid_until": "2026-09-01T15:30:00+09:00",
+            "participation_cap_pct": "5.0",
+            "decision_id": "operations/private/decisions/2026-08-31-1234.md",
+            "at": "2026-08-31T19:00:00+09:00",
+            "root": self.root,
+        }
+        first = propose_order(**args)
+        second = propose_order(**args)
+
+        self.assertEqual(first["status"], "PAPER_PROPOSED")
+        self.assertFalse(first["broker_submitted"])
+        self.assertTrue(second["already_proposed"])
+        with (run_dir / "orders.csv").open(encoding="utf-8", newline="") as source:
+            orders = list(csv.DictReader(source))
+        with (self.root / "operations/private/trade-event-ledger.csv").open(
+            encoding="utf-8", newline=""
+        ) as source:
+            events = list(csv.DictReader(source))
+        handoff = json.loads((run_dir / "handoff.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(orders), 1)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["event_type"], "PAPER_PROPOSED")
+        self.assertIn(first["ticket_id"], handoff["pending_orders"])
+
+    def test_paused_policy_blocks_order_ticket(self) -> None:
+        self._add_holding()
+        started = self._start()
+        run_dir = self.root / str(started["run_dir"])
+        self._complete_research_queue(run_dir)
+        policy_path = self.root / "operations/private/operation-policy.json"
+        policy = json.loads(policy_path.read_text(encoding="utf-8"))
+        policy["operation_mode"] = "PAUSED"
+        policy_path.write_text(
+            json.dumps(policy, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        actions_path = run_dir / "next-day-actions.csv"
+        with actions_path.open(encoding="utf-8", newline="") as source:
+            reader = csv.DictReader(source)
+            fields = list(reader.fieldnames or [])
+            actions = list(reader)
+        actions[0].update(
+            {
+                "next_action": "BUY",
+                "rule_ids": "E-1",
+                "evidence_source_ids": "source-1",
+            }
+        )
+        with actions_path.open("w", encoding="utf-8", newline="") as destination:
+            writer = csv.DictWriter(destination, fieldnames=fields)
+            writer.writeheader()
+            writer.writerows(actions)
+        with self.assertRaisesRegex(PermissionError, "blocks order tickets"):
+            propose_order(
+                run_id="2026-08-31",
+                run_token=str(started["run_token"]),
+                action_id="2026-08-31-1234-next",
+                code="1234",
+                company="Example",
+                side="BUY",
+                action="BUY",
+                rule_ids="E-1",
+                trade_date="2026-09-01",
+                limit_price="1000",
+                quantity="100",
+                position_pct="1",
+                valid_until="2026-09-01T15:30:00+09:00",
+                participation_cap_pct="5",
+                decision_id="decision-1",
+                at="2026-08-31T19:00:00+09:00",
+                root=self.root,
+            )
+
+    def test_trade_action_without_order_is_rejected(self) -> None:
+        self._add_holding()
+        started = self._start()
+        run_dir = self.root / str(started["run_dir"])
+        actions_path = run_dir / "next-day-actions.csv"
+        with actions_path.open(encoding="utf-8", newline="") as source:
+            reader = csv.DictReader(source)
+            fields = list(reader.fieldnames or [])
+            actions = list(reader)
+        actions[0].update(
+            {
+                "next_action": "BUY",
+                "rule_ids": "E-1",
+                "evidence_source_ids": "source-1",
+            }
+        )
+        with actions_path.open("w", encoding="utf-8", newline="") as destination:
+            writer = csv.DictWriter(destination, fieldnames=fields)
+            writer.writeheader()
+            writer.writerows(actions)
+        errors = validate_nightly_artifacts(
+            root=self.root,
+            run_id="2026-08-31",
+            handoff=json.loads((run_dir / "handoff.json").read_text(encoding="utf-8")),
+            coverage=json.loads((run_dir / "coverage.json").read_text(encoding="utf-8")),
+            orders=[],
+        )
+        self.assertTrue(any("requires a matching order ticket" in error for error in errors))
+
+    def test_empty_universe_can_finalize_and_wait_until_next_night(self) -> None:
+        started = self._start()
+        run_dir = self.root / str(started["run_dir"])
+        with (run_dir / "sources.csv").open("a", encoding="utf-8", newline="") as destination:
+            csv.writer(destination).writerow(
+                [
+                    "manual-jpx", "jpx", "", "JPX notices checked",
+                    "2026-08-31T18:20:00+09:00", "2026-08-31T18:50:00+09:00",
+                    "https://www.jpx.co.jp/", "true", "true", "manual check",
+                ]
+            )
+        self._complete_research_queue(run_dir)
+        coverage_path = run_dir / "coverage.json"
+        coverage = json.loads(coverage_path.read_text(encoding="utf-8"))
+        coverage["status"] = "COMPLETED"
+        coverage["source_window"]["through_inclusive_jst"] = "2026-08-31T18:30:00+09:00"
+        for item in coverage["universe"].values():
+            item["checked"] = list(item["expected"])
+        coverage["official_sources"]["company_ir"]["status"] = "NOT_APPLICABLE"
+        coverage["official_sources"]["jpx"]["status"] = "CHECKED"
+        coverage["completed_at_jst"] = "2026-08-31T19:05:00+09:00"
+        coverage_path.write_text(
+            json.dumps(coverage, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        plan_path = run_dir / "work-plan.json"
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        plan["status"] = "COMPLETED"
+        for task in plan["tasks"]:
+            task["status"] = "COMPLETED"
+            task["evidence_source_ids"] = ["manual-jpx"]
+        plan_path.write_text(
+            json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        (run_dir / "research-results.md").write_text(
+            "# 夜間調査結果 2026-08-31\n\n- 状態: `COMPLETED`\n"
+            "- 情報カットオフ（JST）: 2026-08-31T18:30:00+09:00\n"
+            "- 翌営業日: 2026-09-01\n- 対象件数: 0\n- 未解決事項: なし\n\n"
+            "## 調査結果\n\n対象なし。公式情報源の疎通を確認。\n",
+            encoding="utf-8",
+        )
+        report_path = run_dir / "report.md"
+        report = report_path.read_text(encoding="utf-8")
+        report = (
+            report.replace("- 実行状態: `IN-PROGRESS`", "- 実行状態: `COMPLETED`")
+            .replace("- 今回の開示カットオフ（JST）: 未確定", "- 今回の開示カットオフ（JST）: 2026-08-31T18:30:00+09:00")
+            .replace("- 株価基準日: 未確定", "- 株価基準日: 2026-08-31")
+            .replace("- 総合結果: 未確定", "- 総合結果: 対象なし、情報源確認完了")
+        )
+        report_path.write_text(report, encoding="utf-8")
+
+        result = finalize_nightly_run(
+            run_id="2026-08-31",
+            run_token=str(started["run_token"]),
+            completed_at="2026-08-31T19:05:00+09:00",
+            source_cutoff="2026-08-31T18:30:00+09:00",
+            price_date="2026-08-31",
+            summary="対象なし。翌夜まで待機",
+            root=self.root,
+        )
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["next_run_at_jst"], "2026-09-01T18:30:00+09:00")
+        self.assertIn("次回夜間実行まで待機", result["wait_instruction"])
+
+
+if __name__ == "__main__":
+    unittest.main()

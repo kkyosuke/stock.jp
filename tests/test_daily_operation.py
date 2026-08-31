@@ -69,6 +69,53 @@ def complete_artifacts(
         json.dumps(queue, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
 
+    plan_path = run_dir / "work-plan.json"
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    plan.update(
+        {
+            "status": "COMPLETED",
+            "next_trading_date": "2026-09-01",
+            "trading_calendar_confirmed": True,
+        }
+    )
+    for task in plan["tasks"]:
+        task["status"] = "COMPLETED"
+        task["evidence_source_ids"] = ["jpx-check-1"]
+    plan_path.write_text(
+        json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    (run_dir / "research-results.md").write_text(
+        "# 夜間調査結果\n\n- 状態: `COMPLETED`\n"
+        f"- 情報カットオフ（JST）: {source_cutoff}\n"
+        "- 翌営業日: 2026-09-01\n- 対象件数: 0\n- 未解決事項: なし\n\n"
+        "## 調査結果\n\n一次資料を確認済み。\n",
+        encoding="utf-8",
+    )
+    actions_path = run_dir / "next-day-actions.csv"
+    with actions_path.open(encoding="utf-8", newline="") as source:
+        action_fields = next(csv.reader(source))
+    action = dict.fromkeys(action_fields, "")
+    action.update(
+        {
+            "action_id": "2026-08-31-GLOBAL-next",
+            "priority": "NORMAL",
+            "trade_date": "2026-09-01",
+            "code": "GLOBAL",
+            "company": "対象なし",
+            "current_status": "EMPTY",
+            "next_action": "NO-ACTION",
+            "rule_ids": "OPS-EMPTY-UNIVERSE",
+            "trigger_type": "nightly_review",
+            "trigger_condition": "対象なし",
+            "human_action": "なし",
+            "evidence_source_ids": "jpx-check-1",
+        }
+    )
+    with actions_path.open("w", encoding="utf-8", newline="") as destination:
+        writer = csv.DictWriter(destination, fieldnames=action_fields)
+        writer.writeheader()
+        writer.writerow(action)
+
     with (run_dir / "sources.csv").open("a", encoding="utf-8", newline="") as file:
         writer = csv.writer(file)
         for category in ("tdnet", "edinet", "jpx"):
@@ -143,6 +190,36 @@ def append_paper_order(
     )
     with (run_dir / "orders.csv").open("a", encoding="utf-8", newline="") as file:
         csv.DictWriter(file, fieldnames=fields).writerow(order)
+    actions_path = run_dir / "next-day-actions.csv"
+    with actions_path.open(encoding="utf-8", newline="") as source:
+        action_reader = csv.DictReader(source)
+        action_fields = list(action_reader.fieldnames or [])
+        actions = list(action_reader)
+    action_row = dict.fromkeys(action_fields, "")
+    action_row.update(
+        {
+            "action_id": f"2026-08-31-{code}-next",
+            "priority": "HIGH",
+            "trade_date": "2026-09-01",
+            "code": code,
+            "company": "Example",
+            "current_status": "WATCH",
+            "next_action": "BUY",
+            "rule_ids": "E-1",
+            "trigger_type": "monthly",
+            "trigger_condition": "entry gate passed",
+            "limit_price": "1000",
+            "position_pct": "1.0",
+            "ticket_id": ticket_id,
+            "human_action": "PAPER reconciliation",
+            "evidence_source_ids": "jpx-check-1",
+        }
+    )
+    actions.append(action_row)
+    with actions_path.open("w", encoding="utf-8", newline="") as destination:
+        writer = csv.DictWriter(destination, fieldnames=action_fields)
+        writer.writeheader()
+        writer.writerows(actions)
     handoff_path = run_dir / "handoff.json"
     handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
     pending = handoff.setdefault("pending_orders", [])
@@ -200,6 +277,9 @@ class DailyOperationTest(unittest.TestCase):
             "lease.json",
             "provider-health.json",
             "research-queue.json",
+            "work-plan.json",
+            "research-results.md",
+            "next-day-actions.csv",
             "handoff.json",
         ):
             self.assertTrue(

@@ -41,6 +41,11 @@ except ModuleNotFoundError:  # Direct execution: python scripts/daily_operation.
         write_coverage_manifest,
     )
 
+try:
+    from scripts.nightly_artifacts import create_nightly_artifacts
+except ModuleNotFoundError:  # Direct execution: python scripts/daily_operation.py
+    from nightly_artifacts import create_nightly_artifacts
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 JST = ZoneInfo("Asia/Tokyo")
@@ -121,6 +126,9 @@ def prepare_run(
                 "coverage": _relative(run_dir / "coverage.json", root),
                 "provider_health": _relative(run_dir / "provider-health.json", root),
                 "research_queue": _relative(run_dir / "research-queue.json", root),
+                "work_plan": _relative(run_dir / "work-plan.json", root),
+                "research_results": _relative(run_dir / "research-results.md", root),
+                "next_day_actions": _relative(run_dir / "next-day-actions.csv", root),
                 "handoff": _relative(handoff_path, root),
             }
         lease = acquire_run_lease(
@@ -160,6 +168,9 @@ def prepare_run(
             "coverage": _relative(run_dir / "coverage.json", root),
             "provider_health": _relative(run_dir / "provider-health.json", root),
             "research_queue": _relative(run_dir / "research-queue.json", root),
+            "work_plan": _relative(run_dir / "work-plan.json", root),
+            "research_results": _relative(run_dir / "research-results.md", root),
+            "next_day_actions": _relative(run_dir / "next-day-actions.csv", root),
             "handoff": _relative(handoff_path, root),
             "lease": _relative(run_dir / "lease.json", root),
             "run_token": lease["run_token"],
@@ -221,6 +232,7 @@ def prepare_run(
         "attempt_started_at_jst": started_iso,
     }
     _atomic_write_json(handoff_path, handoff)
+    nightly = create_nightly_artifacts(run_id=run_id, at=started_iso, root=root)
     secure_private_tree(root)
     return {
         "run_id": run_id,
@@ -234,6 +246,7 @@ def prepare_run(
         "coverage": _relative(run_dir / "coverage.json", root),
         "provider_health": _relative(run_dir / "provider-health.json", root),
         "research_queue": _relative(run_dir / "research-queue.json", root),
+        **nightly,
         "handoff": _relative(handoff_path, root),
         "lease": _relative(run_dir / "lease.json", root),
         "run_token": lease["run_token"],
