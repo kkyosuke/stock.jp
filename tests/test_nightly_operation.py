@@ -8,6 +8,7 @@ import unittest
 
 from scripts.nightly_artifacts import next_trading_date, validate_nightly_artifacts
 from scripts.nightly_operation import finalize_nightly_run, start_nightly_run
+from scripts.operation_backup import create_backup
 from scripts.operation_state import PROJECT_ROOT, initialize_or_migrate_workspace
 from scripts.order_ticket import propose_order
 
@@ -307,6 +308,31 @@ class NightlyOperationTest(unittest.TestCase):
 
         self.assertFalse(any("unresolved marker: 未確定" in error for error in errors))
 
+    def test_completed_backup_task_requires_an_existing_private_archive(self) -> None:
+        started = self._start()
+        run_dir = self.root / str(started["run_dir"])
+        plan_path = run_dir / "work-plan.json"
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        plan["status"] = "COMPLETED"
+        backup_task = next(
+            task for task in plan["tasks"] if task["task_type"] == "operations_backup"
+        )
+        backup_task["status"] = "COMPLETED"
+        backup_task["evidence_source_ids"] = [
+            "internal:backup:operations/private/backups/missing.zip"
+        ]
+        plan_path.write_text(json.dumps(plan), encoding="utf-8")
+
+        errors = validate_nightly_artifacts(
+            root=self.root,
+            run_id="2026-08-31",
+            handoff=json.loads((run_dir / "handoff.json").read_text(encoding="utf-8")),
+            coverage=json.loads((run_dir / "coverage.json").read_text(encoding="utf-8")),
+            orders=[],
+        )
+
+        self.assertTrue(any("archive does not exist" in error for error in errors))
+
     def test_empty_universe_can_finalize_and_wait_until_next_night(self) -> None:
         started = self._start()
         run_dir = self.root / str(started["run_dir"])
@@ -334,9 +360,18 @@ class NightlyOperationTest(unittest.TestCase):
         plan_path = run_dir / "work-plan.json"
         plan = json.loads(plan_path.read_text(encoding="utf-8"))
         plan["status"] = "COMPLETED"
+        backup = create_backup(
+            at="2026-08-31T18:55:00+09:00",
+            allow_plaintext=True,
+            root=self.root,
+        )
         for task in plan["tasks"]:
             task["status"] = "COMPLETED"
-            task["evidence_source_ids"] = ["manual-jpx"]
+            task["evidence_source_ids"] = (
+                [f"internal:backup:{backup['archive']}"]
+                if task.get("task_type") == "operations_backup"
+                else ["manual-jpx"]
+            )
         plan_path.write_text(
             json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )

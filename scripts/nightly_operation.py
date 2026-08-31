@@ -15,11 +15,13 @@ try:
     from scripts.nightly_artifacts import create_nightly_artifacts
     from scripts.official_source_scan import scan_sources
     from scripts.operation_state import initialize_or_migrate_workspace, validate_workspace
+    from scripts.operation_watchdog import watchdog_status
 except ModuleNotFoundError:  # Direct execution from scripts/
     from daily_operation import complete_run, fail_run, prepare_run, read_status
     from nightly_artifacts import create_nightly_artifacts
     from official_source_scan import scan_sources
     from operation_state import initialize_or_migrate_workspace, validate_workspace
+    from operation_watchdog import watchdog_status
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -66,6 +68,7 @@ def start_nightly_run(
     root: Path = PROJECT_ROOT,
 ) -> dict[str, Any]:
     initialize_or_migrate_workspace(root)
+    watchdog = watchdog_status(at=at, root=root)
     errors = validate_workspace(root)
     if errors:
         raise ValueError("workspace validation failed: " + "; ".join(errors))
@@ -86,6 +89,7 @@ def start_nightly_run(
     )
     return {
         **prepared,
+        "watchdog_before_start": watchdog,
         "source_scan_status": scan["status"],
         "blocking_gap_count": scan["blocking_gap_count"],
         "research_task_count": scan["research_task_count"],

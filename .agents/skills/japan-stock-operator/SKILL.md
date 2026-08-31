@@ -18,7 +18,7 @@ From the repository root, read these files before judging a stock:
 
 Read [references/review-checklists.md](references/review-checklists.md) for the checklist matching the requested review mode. Treat the canonical documents as authoritative if this skill conflicts with them.
 
-For a scheduled run, “today's run,” “today's nightly operation,” or a request to execute all due operations, also read [references/daily-run.md](references/daily-run.md), `docs/nightly-operation-v0.1.md`, and `docs/daily-automation-runbook-v0.1.md`.
+For a scheduled run, “today's run,” “today's nightly operation,” or a request to execute all due operations, also read [references/daily-run.md](references/daily-run.md), `docs/nightly-operation-v0.1.md`, `docs/operation-readiness-v0.1.md`, and `docs/daily-automation-runbook-v0.1.md`.
 
 ## Choose a review mode
 
