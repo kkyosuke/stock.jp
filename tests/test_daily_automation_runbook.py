@@ -56,6 +56,9 @@ class DailyAutomationRunbookTest(unittest.TestCase):
             "source-config-template.json",
             "provider-health-template.json",
             "research-queue-template.json",
+            "work-plan-template.json",
+            "research-results-template.md",
+            "next-day-actions-template.csv",
             "watchlist.csv",
         ):
             self.assertTrue((ROOT / "operations/templates" / filename).is_file())

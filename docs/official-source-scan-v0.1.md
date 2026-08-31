@@ -14,6 +14,7 @@
 | J-Quants API v2 `/td/list` | TDnet適時開示インデックス | `JQUANTS_API_KEY`と対応プラン | 全日成功時に`tdnet=CHECKED` |
 | J-Quants API v2 `/fins/summary` | 決算サマリー | `JQUANTS_API_KEY` | 決算レビュー候補を作成 |
 | J-Quants API v2 `/equities/bars/daily` | 日足・売買代金・調整係数 | `JQUANTS_API_KEY` | 価格・流動性更新の入力 |
+| J-Quants API v2 `/markets/calendar` | 翌営業日と月末判定 | `JQUANTS_API_KEY`と対応プラン | 取得不能なら注文票を停止 |
 
 会社IRとJPXの売買停止・監理/整理・上場廃止等の告知は、対象URLが会社ごとに異なり一つの公開APIで網羅できないため、エージェントが一次サイトを確認する`PENDING`タスクとして必ず作る。J-QuantsのTDnetエンドポイントが使えない場合も、手動TDnet確認タスクと重大データ不足を作る。
 

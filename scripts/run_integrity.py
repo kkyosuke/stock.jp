@@ -18,6 +18,11 @@ try:
 except ModuleNotFoundError:  # Direct execution from scripts/
     from operation_policy import policy_status
 
+try:
+    from scripts.nightly_artifacts import validate_nightly_artifacts
+except ModuleNotFoundError:  # Direct execution from scripts/
+    from nightly_artifacts import validate_nightly_artifacts
+
 
 JST = ZoneInfo("Asia/Tokyo")
 LEASE_HOURS = 6
@@ -433,6 +438,7 @@ def _validate_research_artifacts(
     queue: dict[str, Any],
     run_id: str,
     handoff: dict[str, Any],
+    valid_source_ids: set[str],
 ) -> list[str]:
     errors: list[str] = []
     if health.get("run_id") != run_id:
@@ -474,6 +480,17 @@ def _validate_research_artifacts(
             errors.append(
                 f"completed research task lacks evidence: {task_id or '<blank>'}"
             )
+        if status == "COMPLETED" and isinstance(task.get("evidence_source_ids"), list):
+            cited = {
+                str(value).strip()
+                for value in task["evidence_source_ids"]
+                if str(value).strip()
+            }
+            unknown = sorted(cited - valid_source_ids)
+            if unknown:
+                errors.append(
+                    f"research task {task_id or '<blank>'} cites unknown evidence: {', '.join(unknown)}"
+                )
     duplicates = sorted(
         {value for value in task_ids if value and task_ids.count(value) > 1}
     )
@@ -662,6 +679,9 @@ def validate_run_artifacts(
         "lease.json",
         "provider-health.json",
         "research-queue.json",
+        "work-plan.json",
+        "research-results.md",
+        "next-day-actions.csv",
     )
     missing = [name for name in required if not (run_dir / name).is_file()]
     if missing:
@@ -728,6 +748,20 @@ def validate_run_artifacts(
             queue=research_queue,
             run_id=run_id,
             handoff=handoff,
+            valid_source_ids={
+                row.get("source_id", "").strip()
+                for row in source_rows
+                if row.get("source_id", "").strip()
+            },
+        )
+    )
+    errors.extend(
+        validate_nightly_artifacts(
+            root=root,
+            run_id=run_id,
+            handoff=handoff,
+            coverage=coverage,
+            orders=order_rows,
         )
     )
     if handoff.get("operation_mode") != policy.get("operation_mode"):

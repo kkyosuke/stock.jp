@@ -7,7 +7,7 @@
 
 ## 1. 結論
 
-ChatGPTデスクトップの同じチャットに、ローカルプロジェクトを対象とする定時タスクを1つだけ作る。平日18:30に `$japan-stock-operator` を明示して実行すれば、前回からの差分確認、期限が来た週次・月次・四半期レビュー、翌営業日の注文候補、ログ保存、次回への引き継ぎを1回にまとめられる。
+ChatGPTデスクトップの同じチャットに、ローカルプロジェクトを対象とする定時タスクを1つだけ作る。平日18:30に `$japan-stock-operator` を明示して実行すれば、前回からの差分確認、期限が来た週次・月次・四半期レビュー、全対象の翌営業日アクション、注文候補、ログ保存、次回への引き継ぎを1回にまとめられる。具体的な正規フローは[夜間ワンショット運用 v0.1](nightly-operation-v0.1.md)に従う。
 
 日次タスクが行うのは情報収集、ルール判定、注文案の作成までである。証券会社への注文送信は行わない。`PAPER`では注文票を `PAPER_PROPOSED` とし、実際には入力しない。`LIVE`昇格後だけ、利用者が翌営業日8:45〜8:55に約10分の注文前チェックを行い、承認した注文を手入力する。18:30以後に重要開示、売買停止、取引所・証券会社障害が発生し得るため、この確認は省略しない。
 
@@ -40,6 +40,9 @@ ChatGPTデスクトップの同じチャットに、ローカルプロジェク�
 | `runs/YYYY-MM-DD/lease.json` | 同時実行を防ぐ6時間のrun token | 日次タスク |
 | `runs/YYYY-MM-DD/provider-health.json` | 公式APIごとの成功・不足・取得件数 | 日次タスク |
 | `runs/YYYY-MM-DD/research-queue.json` | 当夜に読む一次資料と手動確認のキュー | 日次タスク |
+| `runs/YYYY-MM-DD/work-plan.json` | 当夜の期限到来タスクと完了状態 | 日次タスク |
+| `runs/YYYY-MM-DD/research-results.md` | 当夜の調査結果 | 日次タスク |
+| `runs/YYYY-MM-DD/next-day-actions.csv` | 全対象の翌営業日アクション | 日次タスク |
 | `runs/YYYY-MM-DD/raw-sources/` | APIの生レスポンス。private限定 | 日次タスク |
 | `runs/YYYY-MM-DD/handoff.json` | 実行状態と次回キュー | 日次タスク |
 | `runs/YYYY-MM-DD/pretrade-check.md` | 寄り前の取消・承認チェック | 利用者 |
@@ -90,16 +93,14 @@ ChatGPTデスクトップの同じチャットに、ローカルプロジェク�
 ### 定時タスクへ登録するプロンプト
 
 ~~~text
-$japan-stock-operator を使って、このローカルプロジェクトの「今日の日次運用」を実行してください。
-
-必ず operations/private/operation-policy.json、state.json と前回の handoff.json を正本として再開し、前回の開示カットオフ後から今回のJSTカットオフまでを確認してください。保有銘柄、未処理注文、監視銘柄を対象に日次イベントを確認し、期限が来た週次・月次・四半期・本決算・ルール運用レビューだけを同じ実行へ含めてください。
-
-scripts/daily_operation.py prepare で当日フォルダを作成または再開し、返された run_token を保持してください。同じtokenで scripts/official_source_scan.py を実行し、research-queue.jsonの全タスクを一次資料で処理してください。report.md、coverage.json、sources.csv、orders.csv、必要な個別判断ログ、handoff.json を更新してください。注文票の状態はoperation-policyに従い、PAPERでは PAPER_PROPOSED、昇格条件を満たすLIVEでは PROPOSED、PAUSEDまたは昇格条件未達では作成禁止としてください。証券会社へ注文を送信しないでください。重要な対象を確認できなければ同じrun_tokenで failed としてカットオフを進めず、取得できなかった内容を残してください。完了時は同じrun_tokenで complete を実行し、最後に総合結果、調査結果、緊急判断、翌営業日のアクションと注文候補、人間が行うこと、保存先を簡潔に報告してください。
+$japan-stock-operator を使って、今日の夜間運用を最後まで実行してください。
 ~~~
+
+スキルは`nightly_operation.py start`から開始し、全調査・全対象アクション・必要な注文票を保存して`finalize`する。成功後は次の夜まで待機する。証券会社への注文送信は行わない。
 
 ## 5. 1回の実行フロー
 
-1. `prepare` を実行し、返された`run_token`を保持する。同日の実行が`locked`なら別実行を開始しない
+1. `nightly_operation.py start` を実行し、返された`run_token`を保持する。同日の実行が`locked`なら別実行を開始しない
 2. `operation-policy.json`、`state.json`、保有、取引・資金台帳、再購入禁止、監視、未処理注文、前回引き継ぎを読み、`operation_state.py validate`を通す
 3. 今回のJST情報カットオフを宣言する
 4. `official_source_scan.py`でTDnet、EDINET、決算サマリー、日足を差分取得し、生成されたキューで会社IRとJPXを確認する
@@ -107,36 +108,27 @@ scripts/daily_operation.py prepare で当日フォルダを作成または再開
 6. 期限到来キューだけ週次・月次・四半期・本決算レビューする
 7. 判断根拠を `sources.csv` と日次レポートへ記録し、`coverage.json`の確認済み対象を更新する
 8. 売買判断または期限到来レビューだけ個別判断ログを作る
-9. 翌営業日の注文候補を、`PAPER`なら`PAPER_PROPOSED`、昇格済み`LIVE`なら`PROPOSED`で `orders.csv` へ記録する
+9. 全対象の翌営業日アクションを`next-day-actions.csv`へ記録し、売買なら`order_ticket.py propose`で、`PAPER`は`PAPER_PROPOSED`、昇格済み`LIVE`は`PROPOSED`の注文票を設定する
 10. `handoff.json` の未完了レビュー、未処理注文、データ不足、次回日時を更新する
-11. 全必須対象を確認できた場合だけ `complete` で状態を進める
+11. 全必須対象を確認できた場合だけ `nightly_operation.py finalize` で状態を進め、次の夜まで待機する
 12. 重要な取得失敗があれば `fail` とし、次回は前回成功時のカットオフから再確認する
 
 土日・祝日明けも前回成功時からの差分を見るため、休日中の開示を取りこぼさない。平日の非取引日や価格未更新日は無理に売買判断を作らず、開示確認だけを行って価格基準日を明記する。
 
 ## 6. 実行コマンド
 
-日次タスクは、現在日時をUTCオフセット付きで渡す。
+日次タスクは、現在日時と情報カットオフをUTCオフセット付きで一度だけ渡す。公式情報源スキャンもこの開始コマンドに含まれる。
 
 ~~~bash
-.venv/bin/python scripts/daily_operation.py prepare \
-  --at 2026-08-31T18:30:00+09:00
-~~~
-
-続けて、同じtokenで公式情報源を取得する。
-
-~~~bash
-.venv/bin/python scripts/official_source_scan.py \
-  --run-id 2026-08-31 \
-  --run-token '<prepareが返したrun_token>' \
+.venv/bin/python scripts/nightly_operation.py start \
+  --at 2026-08-31T18:35:00+09:00 \
   --cutoff 2026-08-31T18:30:00+09:00 \
-  --at 2026-08-31T18:35:00+09:00
 ~~~
 
 成功時:
 
 ~~~bash
-.venv/bin/python scripts/daily_operation.py complete \
+.venv/bin/python scripts/nightly_operation.py finalize \
   --run-id 2026-08-31 \
   --run-token '<prepareが返したrun_token>' \
   --completed-at 2026-08-31T19:05:00+09:00 \
@@ -148,7 +140,7 @@ scripts/daily_operation.py prepare で当日フォルダを作成または再開
 重要な取得失敗時:
 
 ~~~bash
-.venv/bin/python scripts/daily_operation.py fail \
+.venv/bin/python scripts/nightly_operation.py fail \
   --run-id 2026-08-31 \
   --run-token '<prepareが返したrun_token>' \
   --completed-at 2026-08-31T19:05:00+09:00 \
@@ -158,7 +150,7 @@ scripts/daily_operation.py prepare で当日フォルダを作成または再開
 現在の最終成功状態は次で確認する。
 
 ~~~bash
-.venv/bin/python scripts/daily_operation.py status
+.venv/bin/python scripts/nightly_operation.py status
 ~~~
 
 ## 7. 注文日の最小作業
