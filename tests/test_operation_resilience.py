@@ -160,6 +160,25 @@ class OperationResilienceTest(unittest.TestCase):
             result["automatic_source_blockers"],
         )
 
+    def test_empty_universe_is_a_candidate_review_warning_not_a_blocker(self) -> None:
+        write_price_archive(self.root, ["1234"])
+        create_backup(
+            at="2026-09-01T17:00:00+09:00",
+            allow_plaintext=True,
+            root=self.root,
+        )
+
+        result = check_readiness(
+            root=self.root, environ={}, at="2026-09-01T18:30:00+09:00"
+        )
+
+        self.assertTrue(result["paper_go"])
+        self.assertEqual(result["active_target_count"], 0)
+        self.assertEqual(result["price_snapshot"]["target_coverage_ratio"], 1.0)
+        self.assertTrue(
+            any("initial full-market candidate review" in item for item in result["warnings"])
+        )
+
     def test_paper_blocks_missing_target_price_or_backup_archive(self) -> None:
         self._add_holding()
         write_price_archive(self.root, ["5678"])

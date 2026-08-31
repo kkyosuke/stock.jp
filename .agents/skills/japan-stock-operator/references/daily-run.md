@@ -19,6 +19,8 @@ When an `operations_backup` task is due, run `scripts/operation_backup.py create
 
 Check all current holdings and pending orders. Check active watchlist names for new official disclosures, but do not fully rescore every watchlist name every day. Use the prior successful disclosure cutoff as the lower bound and the declared current cutoff as the upper bound.
 
+If holdings and active watchlist are both empty, do not block PAPER and do not invent a stock action. Keep the generated `GLOBAL / NO-ACTION`, complete the `initial_universe_review` from the accumulated full-market archive, narrow candidates, verify primary company evidence for those candidates, and only then activate a small watchlist for later daily runs.
+
 Include other modes only when due:
 
 - Daily event checks on every run

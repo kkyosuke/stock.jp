@@ -3,7 +3,7 @@
 ## 結論
 
 - 実資金`LIVE`: **NO-GO**。コードだけでは完了しないLIVEゲートを残し、証拠が揃うまで機械的に停止する。
-- 継続`PAPER`: **仕組みは実装済み、利用者のprivate設定はNO-GO**。active監視銘柄または保有が0件で、31日以内の検証済みバックアップも記録されていない。
+- 継続`PAPER`: **仕組みは実装済み、利用者のprivate設定はNO-GO**。現在のblockerは31日以内の検証済みバックアップが記録されていない1点である。active対象0件は初回候補抽出モードとして許可する。
 - 証券会社への通信: 常に`HUMAN_ONLY`。PAPER注文票は`PAPER_PROPOSED`であり、実注文しない。
 
 `operation_bootstrap.py check`が`paper_go: true`を返すまで夜間runは開始できない。`nightly_operation.py start`も同じreadinessを再検証するため、手順の飛ばし越しでは開始できない。
@@ -48,23 +48,21 @@ Yahooは候補探索とPAPER計算用の二次価格源であり、売買判断�
 
 これはYahoo実APIで取得された株価データの整合性確認であり、公式価格確認、投資成績、point-in-time全母集団、前向きPAPER期間を証明しない。
 
-回帰確認では単体・統合テスト104件、Python compile、`git diff --check`が成功した。20営業日のオフライン状態遷移も20件完了、broker submission 0、重複注文0で成功した。ただしオフラインsmokeは実データ20営業日LIVEゲートの代替ではない。
+回帰確認では単体・統合テスト107件、Python compile、`git diff --check`が成功した。20営業日のオフライン状態遷移も20件完了、broker submission 0、重複注文0で成功した。ただしオフラインsmokeは実データ20営業日LIVEゲートの代替ではない。
 
-現在のprivate設定へ2026年9月1日18:30 JSTを指定してreadinessを実行した結果、PAPER blockerは次の2件だった。
+修正後、現在のprivate設定へ2026年9月1日18:30 JSTを指定した場合のPAPER blockerは次の1件となる。
 
-- `active universe is empty; review the tracked full-market archive and activate candidates`
 - `no verified operation backup has been recorded`
 
-EDINET APIキー未設定はPAPER blockerではなく手動一次資料fallbackの警告である。LIVEでは必須情報源coverageの一部としてblockerのままとなる。
+active対象0件は警告とし、PAPERは`GLOBAL / NO-ACTION`と`initial_universe_review`を作成する。EDINET APIキー未設定もPAPER blockerではなく手動一次資料fallbackの警告である。LIVEでは必須情報源coverageの一部としてblockerのままとなる。
 
 ## PAPERをGOにする手順
 
-1. 利用者が少数の監視銘柄を指定するか、月次候補レビューで一次資料を確認した銘柄を`watchlist.csv`のactiveへ登録する。全3,713銘柄の手入力は不要。
-2. 現在保有があれば数量・原価を`portfolio-register.csv`へ正確に登録する。保有していない銘柄を推測で登録しない。
-3. 最新データPRを確認・マージし、夜間運用を行う永続checkoutへ最新`main`を反映する。
-4. PAPER用バックアップを作成して検証する。可能なら最初から`age`暗号化を使う。
-5. `.venv/bin/python scripts/operation_bootstrap.py check`で`paper_blockers`が0件、`paper_go: true`であることを確認する。
-6. 人が「今日のタスクを実行して」と1回依頼し、一次資料、世界情勢、全アクション、ログを確認してfinalizeする。
+1. 最新データPRを確認・マージし、夜間運用を行う永続checkoutへ最新`main`を反映する。
+2. `age`暗号化したPAPER用バックアップを作成して検証する。
+3. `.venv/bin/python scripts/operation_bootstrap.py check`で`paper_blockers`が0件、`paper_go: true`であることを確認する。
+4. 人が「今日のタスクを実行して」と1回依頼する。対象0件ならAIが全市場から候補を絞り、個別注文は`NO-ACTION`にする。
+5. 候補の一次資料を確認できた後だけ、少数を`watchlist.csv`のactiveへ登録する。現在保有があれば数量・原価を`portfolio-register.csv`へ正確に登録する。
 
 EDINET APIキーはPAPER開始の必須条件ではない。ただしキーがない場合は毎回の手動一次資料確認が必須であり、取得不能なら売買判断を作らない。
 
