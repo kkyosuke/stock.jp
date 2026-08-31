@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import json
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,17 @@ REQUIRED_LIVE_GATES = {
     "backup_restore_drill",
     "personal_risk_and_broker_check",
 }
+VALID_RULE_VERSIONS = {"v0.2", "v0.3"}
+
+
+def _is_aware_timestamp(value: Any) -> bool:
+    if not isinstance(value, str) or not value.strip():
+        return False
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None and parsed.utcoffset() is not None
 
 
 def load_policy(path: Path = DEFAULT_POLICY) -> dict[str, Any]:
@@ -35,8 +47,21 @@ def validate_policy(policy: dict[str, Any]) -> list[str]:
     if policy.get("broker_submission") not in VALID_SUBMISSION:
         errors.append("broker_submission must be HUMAN_ONLY")
     active = policy.get("active_rule_version")
-    if active not in {"v0.2", "v0.3"}:
+    if active not in VALID_RULE_VERSIONS:
         errors.append("active_rule_version must be v0.2 or v0.3")
+    shadows = policy.get("shadow_rule_versions")
+    if not isinstance(shadows, list):
+        errors.append("shadow_rule_versions must be a list")
+    else:
+        invalid_shadows = [value for value in shadows if value not in VALID_RULE_VERSIONS]
+        if invalid_shadows:
+            errors.append("shadow_rule_versions contains an unsupported version")
+        if len(shadows) != len(set(map(str, shadows))):
+            errors.append("shadow_rule_versions must not contain duplicates")
+        if active in shadows:
+            errors.append("active_rule_version cannot also be a shadow version")
+    if not _is_aware_timestamp(policy.get("effective_at_jst")):
+        errors.append("effective_at_jst must be an aware ISO timestamp")
     gates = policy.get("live_gates")
     if not isinstance(gates, dict):
         errors.append("live_gates must be an object")
@@ -64,6 +89,13 @@ def validate_policy(policy: dict[str, Any]) -> list[str]:
     approval = policy.get("approval")
     if not isinstance(approval, dict):
         errors.append("approval must be an object")
+    else:
+        for name in ("approved_by", "approved_at_jst", "evidence_path"):
+            if approval.get(name) is not None and not isinstance(approval.get(name), str):
+                errors.append(f"approval.{name} must be a string or null")
+        approved_at = approval.get("approved_at_jst")
+        if approved_at is not None and not _is_aware_timestamp(approved_at):
+            errors.append("approval.approved_at_jst must be an aware ISO timestamp or null")
     return errors
 
 
@@ -95,7 +127,9 @@ def policy_status(policy: dict[str, Any]) -> dict[str, Any]:
     failures = live_gate_failures(policy) if not errors else []
     mode = policy.get("operation_mode")
     live_orders_allowed = mode == "LIVE" and not errors and not failures
-    if mode == "PAPER":
+    if errors:
+        ticket_status = "BLOCKED"
+    elif mode == "PAPER":
         ticket_status = "PAPER_PROPOSED"
     elif live_orders_allowed:
         ticket_status = "PROPOSED"

@@ -1,6 +1,7 @@
 import copy
 import json
 from pathlib import Path
+import shutil
 from tempfile import TemporaryDirectory
 import unittest
 
@@ -47,6 +48,7 @@ class OperationPolicyTest(unittest.TestCase):
         policy = copy.deepcopy(self.policy)
         policy["operation_mode"] = "LIVE"
         policy["active_rule_version"] = "v0.3"
+        policy["shadow_rule_versions"] = ["v0.2"]
         for gate in policy["live_gates"]:
             policy["live_gates"][gate] = True
             policy["live_gate_evidence"][gate] = f"operations/private/evidence/{gate}.md"
@@ -62,8 +64,24 @@ class OperationPolicyTest(unittest.TestCase):
 
     def test_invalid_policy_is_rejected(self) -> None:
         self.policy["broker_submission"] = "AUTOMATIC"
+        status = policy_status(self.policy)
+
+        self.assertIn("broker_submission must be HUMAN_ONLY", validate_policy(self.policy))
+        self.assertFalse(status["valid"])
+        self.assertEqual(status["ticket_status"], "BLOCKED")
+
+    def test_rule_versions_and_policy_timestamps_are_validated(self) -> None:
+        self.policy["shadow_rule_versions"] = ["v0.2", "v0.3", "v0.3"]
+        self.policy["effective_at_jst"] = "2026-08-31T00:00:00"
+        self.policy["approval"]["approved_at_jst"] = "not-a-timestamp"
+
+        errors = validate_policy(self.policy)
+
+        self.assertIn("active_rule_version cannot also be a shadow version", errors)
+        self.assertIn("shadow_rule_versions must not contain duplicates", errors)
+        self.assertIn("effective_at_jst must be an aware ISO timestamp", errors)
         self.assertIn(
-            "broker_submission must be HUMAN_ONLY", validate_policy(self.policy)
+            "approval.approved_at_jst must be an aware ISO timestamp or null", errors
         )
 
     def test_true_live_gate_without_evidence_is_blocked(self) -> None:
@@ -80,19 +98,9 @@ class OperationPolicyTest(unittest.TestCase):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "operations").mkdir()
-            templates = root / "operations/templates"
-            templates.mkdir()
-            for name in (
-                "daily-run-state-template.json",
-                "operation-policy.json",
-                "rule-review-log.csv",
-                "watchlist.csv",
-                "portfolio-register.csv",
-                "run-history-template.csv",
-            ):
-                (templates / name).write_bytes(
-                    (ROOT / "operations/templates" / name).read_bytes()
-                )
+            shutil.copytree(
+                ROOT / "operations/templates", root / "operations/templates"
+            )
             initialize_workspace(root)
             private_policy = root / "operations/private/operation-policy.json"
             original = load_policy(private_policy)
