@@ -12,6 +12,14 @@ import tempfile
 from typing import Any
 from zoneinfo import ZoneInfo
 
+try:
+    from scripts.operation_state import (
+        initialize_or_migrate_workspace,
+        secure_private_tree,
+    )
+except ModuleNotFoundError:  # Direct execution: python scripts/daily_operation.py
+    from operation_state import initialize_or_migrate_workspace, secure_private_tree
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 JST = ZoneInfo("Asia/Tokyo")
@@ -62,36 +70,8 @@ def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
     temporary_path.replace(path)
 
 
-def initialize_workspace(root: Path = PROJECT_ROOT) -> dict[str, list[str]]:
-    templates = root / "operations/templates"
-    private = _private_root(root)
-    private.mkdir(parents=True, exist_ok=True)
-    created: list[str] = []
-    existing: list[str] = []
-
-    files = {
-        "daily-run-state-template.json": private / "state.json",
-        "operation-policy.json": private / "operation-policy.json",
-        "rule-review-log.csv": private / "rule-review-log.csv",
-        "watchlist.csv": private / "watchlist.csv",
-        "portfolio-register.csv": private / "portfolio-register.csv",
-        "run-history-template.csv": private / "run-history.csv",
-    }
-    for template_name, destination in files.items():
-        if destination.exists():
-            existing.append(_relative(destination, root))
-            continue
-        shutil.copyfile(templates / template_name, destination)
-        created.append(_relative(destination, root))
-
-    for directory in (private / "runs", private / "decisions"):
-        if directory.exists():
-            existing.append(_relative(directory, root))
-        else:
-            directory.mkdir(parents=True)
-            created.append(_relative(directory, root))
-
-    return {"created": created, "existing": existing}
+def initialize_workspace(root: Path = PROJECT_ROOT) -> dict[str, Any]:
+    return initialize_or_migrate_workspace(root)
 
 
 def prepare_run(*, at: str, root: Path = PROJECT_ROOT) -> dict[str, Any]:
@@ -101,6 +81,7 @@ def prepare_run(*, at: str, root: Path = PROJECT_ROOT) -> dict[str, Any]:
     run_id = started.date().isoformat()
     private = _private_root(root)
     state = _read_json(private / "state.json")
+    policy = _read_json(private / "operation-policy.json")
     run_dir = private / "runs" / run_id
     handoff_path = run_dir / "handoff.json"
 
@@ -143,6 +124,8 @@ def prepare_run(*, at: str, root: Path = PROJECT_ROOT) -> dict[str, Any]:
         report.replace("{{RUN_ID}}", run_id)
         .replace("{{STARTED_AT_JST}}", started_iso)
         .replace("{{PREVIOUS_CUTOFF_JST}}", previous_cutoff or "初回実行")
+        .replace("{{OPERATION_MODE}}", policy["operation_mode"])
+        .replace("{{ACTIVE_RULE_VERSION}}", policy["active_rule_version"])
     )
     (run_dir / "report.md").write_text(report, encoding="utf-8")
     shutil.copyfile(
@@ -158,13 +141,15 @@ def prepare_run(*, at: str, root: Path = PROJECT_ROOT) -> dict[str, Any]:
     )
 
     handoff = {
-        "schema_version": "1.0",
+        "schema_version": "2.0",
         "run_id": run_id,
         "status": "in_progress",
         "started_at_jst": started_iso,
         "completed_at_jst": None,
         "previous_run_id": state.get("last_run_id"),
         "previous_disclosure_cutoff_jst": previous_cutoff,
+        "operation_mode": policy["operation_mode"],
+        "active_rule_version": policy["active_rule_version"],
         "source_cutoff_jst": None,
         "price_date": None,
         "pending_reviews": state.get("pending_reviews", []),
@@ -176,6 +161,7 @@ def prepare_run(*, at: str, root: Path = PROJECT_ROOT) -> dict[str, Any]:
         "attempt_started_at_jst": started_iso,
     }
     _atomic_write_json(handoff_path, handoff)
+    secure_private_tree(root)
     return {
         "run_id": run_id,
         "resumed": False,
@@ -204,6 +190,7 @@ def _append_history(
     private = _private_root(root)
     history_path = private / "run-history.csv"
     run_dir = private / "runs" / handoff["run_id"]
+    policy = _read_json(private / "operation-policy.json")
     with history_path.open("a", encoding="utf-8", newline="") as destination:
         writer = csv.writer(destination)
         writer.writerow(
@@ -213,6 +200,10 @@ def _append_history(
                 handoff.get("attempt_started_at_jst", handoff["started_at_jst"]),
                 handoff["completed_at_jst"],
                 handoff["status"],
+                handoff.get("operation_mode", policy.get("operation_mode", "")),
+                handoff.get(
+                    "active_rule_version", policy.get("active_rule_version", "")
+                ),
                 handoff.get("source_cutoff_jst") or "",
                 handoff.get("price_date") or "",
                 _relative(run_dir / "report.md", root),
@@ -244,8 +235,14 @@ def _persist_completed_state(*, root: Path, handoff: dict[str, Any]) -> None:
     last_run_id = state.get("last_run_id")
     if last_run_id is not None and last_run_id > handoff["run_id"]:
         return
+    if (
+        last_run_id == handoff["run_id"]
+        and state.get("last_successful_run_at_jst") == handoff["completed_at_jst"]
+    ):
+        return
     state.update(
         {
+            "state_revision": state.get("state_revision", 0) + 1,
             "last_successful_run_at_jst": handoff["completed_at_jst"],
             "last_disclosure_cutoff_jst": handoff["source_cutoff_jst"],
             "last_price_date": handoff["price_date"],
@@ -254,6 +251,11 @@ def _persist_completed_state(*, root: Path, handoff: dict[str, Any]) -> None:
             "pending_orders": handoff.get("pending_orders", []),
             "data_gaps": handoff.get("data_gaps", []),
             "next_run_at_jst": handoff.get("next_run_at_jst"),
+            "unreconciled_ticket_ids": handoff.get("pending_orders", []),
+            "consecutive_successful_runs": state.get(
+                "consecutive_successful_runs", 0
+            )
+            + 1,
         }
     )
     _atomic_write_json(state_path, state)
@@ -378,6 +380,11 @@ def fail_run(
         }
     )
     _atomic_write_json(handoff_path, handoff)
+    state_path = private / "state.json"
+    state = _read_json(state_path)
+    state["state_revision"] = state.get("state_revision", 0) + 1
+    state["consecutive_successful_runs"] = 0
+    _atomic_write_json(state_path, state)
     if not _history_has_attempt_status(
         root=root,
         run_id=run_id,

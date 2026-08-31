@@ -40,6 +40,8 @@ ChatGPTデスクトップの同じチャットに、ローカルプロジェク�
 | `runs/YYYY-MM-DD/pretrade-check.md` | 寄り前の取消・承認チェック | 利用者 |
 | `decisions/*.md` | 売買判断・期限到来レビューの詳細 | 日次タスク |
 
+銘柄・取引・資金の詳しい正本と移行方法は[状態・台帳仕様 v0.2](operation-state-v0.2.md)に従う。とくに、部分利確済みフラグ、`S-B`連続数、再購入禁止、回収原資、業種上限、コーポレートアクションはチャットから推測しない。
+
 正確な数量、価格、資産、税、証券会社注文IDはこの非公開領域だけに置く。認証情報、パスワード、APIキー、口座番号はここにも保存しない。
 
 ### 2.3 失敗時に確認済み範囲を偽らない
@@ -52,6 +54,7 @@ ChatGPTデスクトップの同じチャットに、ローカルプロジェク�
 
 ~~~bash
 .venv/bin/python scripts/daily_operation.py init
+.venv/bin/python scripts/operation_state.py validate
 ~~~
 
 次に、次の2ファイルへ対象を登録する。
@@ -88,7 +91,7 @@ scripts/daily_operation.py prepare で当日フォルダを作成または再開
 ## 5. 1回の実行フロー
 
 1. `prepare` を実行し、同日の未完了実行があれば再開する
-2. `operation-policy.json`、`state.json`、保有、監視、未処理注文、前回引き継ぎを読む
+2. `operation-policy.json`、`state.json`、保有、取引・資金台帳、再購入禁止、監視、未処理注文、前回引き継ぎを読み、`operation_state.py validate`を通す
 3. 今回のJST情報カットオフを宣言する
 4. 前回カットオフ後のTDnet、EDINET、会社IR、JPXを差分確認する
 5. `S-A`を最優先し、注文候補に新情報があれば `WAIT` または取消候補にする

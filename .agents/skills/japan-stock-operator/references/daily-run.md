@@ -6,7 +6,7 @@ Use this workflow when the request is “today's run,” a scheduled operation, 
 
 1. Read `docs/daily-automation-runbook-v0.1.md`, `operations/private/operation-policy.json`, and the canonical rule files named in `SKILL.md`.
 2. Run `scripts/daily_operation.py prepare --at <current aware JST timestamp>`.
-3. Read the returned run paths, `operations/private/state.json`, the previous run's `handoff.json` when present, `portfolio-register.csv`, and `watchlist.csv`.
+3. Run `scripts/operation_state.py validate`, then read the returned run paths, `operations/private/state.json`, the previous run's `handoff.json` when present, `portfolio-register.csv`, `watchlist.csv`, and the trade, recovered-capital, cash, corporate-action, rebuy-restriction, and industry-exposure ledgers.
 4. If the returned run status is already `completed`, report that the date was already closed. Do not create duplicate orders.
 5. If it is `in_progress`, resume the existing files rather than replacing them.
 
@@ -36,6 +36,8 @@ Update the current run's:
 - `handoff.json` with `pending_reviews`, `pending_orders`, `data_gaps`, and `next_run_at_jst`
 
 Reconcile fill or cancellation data already entered by the user before preparing another order. Never infer an execution from a proposed order.
+
+Append each proposal, paper fill, human-reported fill, cancellation, and expiration to `trade-event-ledger.csv`. Update position, capital, recovered-capital, rebuy-restriction, and industry ledgers only from a recorded event. Do not create another ticket for a code while its prior ticket remains unreconciled.
 
 ## Close safely
 

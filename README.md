@@ -4,6 +4,7 @@
 
 - [日本株テンバガー実運用手順書 v0.1](docs/live-operation-playbook-v0.1.md) — 注文、監視、情勢指数、購入・継続・追加・縮小・売却の手順
 - [日本株運用ガバナンス v0.1](docs/operation-governance-v0.1.md) — PAPER/LIVE、適用ルール版、昇格条件、定期的なルール見直し
+- [日本株運用状態・台帳仕様 v0.2](docs/operation-state-v0.2.md) — 利確フラグ、決算連続条件、再購入禁止、回収原資、約定履歴を翌日へ引き継ぐ
 - [日次自動実行手順書 v0.1](docs/daily-automation-runbook-v0.1.md) — 平日1回の定時実行、注文候補、失敗時の再開、次回への引き継ぎ
 - [日本株運用レビュースキル](.agents/skills/japan-stock-operator/SKILL.md) — 同じ判定とログ作成をCodexで再現
 - [運用ログ用テンプレート](operations/templates/decision-log-template.md) — 個人情報を含む実ログは `operations/private/` に保存
