@@ -4,22 +4,25 @@ from __future__ import annotations
 
 import argparse
 import csv
-from datetime import date, datetime, time, timedelta
 import json
-from pathlib import Path
 import shutil
 import tempfile
+from datetime import date, datetime, time, timedelta
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
 try:
-    from scripts.nightly_operation import finalize_nightly_run
     from scripts.daily_operation import prepare_run
+    from scripts.nightly_operation import finalize_nightly_run
     from scripts.operation_backup import create_backup
-    from scripts.operation_state import initialize_or_migrate_workspace, validate_workspace
+    from scripts.operation_state import (
+        initialize_or_migrate_workspace,
+        validate_workspace,
+    )
 except ModuleNotFoundError:  # Direct execution from scripts/
-    from nightly_operation import finalize_nightly_run
     from daily_operation import prepare_run
+    from nightly_operation import finalize_nightly_run
     from operation_backup import create_backup
     from operation_state import initialize_or_migrate_workspace, validate_workspace
 
@@ -111,6 +114,12 @@ def _complete_artifacts(run_dir: Path, run_date: date) -> None:
         f"- 情報カットオフ（JST）: {cutoff}\n- 翌営業日: 対象なし\n"
         "- 対象件数: 0\n- 未解決事項: なし\n\n"
         "## 調査結果\n\nオフライン状態遷移試験を完了。\n",
+        encoding="utf-8",
+    )
+    (run_dir / "global-risk.md").write_text(
+        "# 世界情勢・市場リスク確認\n\n- 状態: `COMPLETED`\n"
+        f"- 情報カットオフ（JST）: {cutoff}\n- 判定: `NORMAL`\n\n"
+        "オフライン状態遷移試験のため外部判断は行わない。\n",
         encoding="utf-8",
     )
     report_path = run_dir / "report.md"

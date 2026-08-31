@@ -66,7 +66,7 @@ jobs:
             日足OHLCVを取得した自動更新です。
 
             - 用途: 候補探索・欠損監視
-            - 売買判断: J-Quants等の公式データで再照合が必要
+            - 売買判断: JPX、会社IR、証券会社等の一次資料で再照合が必要
             - 取得失敗: `latest.json` とCSVの `取得状態` を確認
           add-paths: |
             data/daily-prices

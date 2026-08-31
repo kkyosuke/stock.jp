@@ -3,20 +3,23 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime
 import hashlib
 import json
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import tempfile
-from typing import Any
 import zipfile
+from datetime import datetime
+from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
 try:
-    from scripts.operation_state import initialize_or_migrate_workspace, secure_private_tree
+    from scripts.operation_state import (
+        initialize_or_migrate_workspace,
+        secure_private_tree,
+    )
 except ModuleNotFoundError:  # Direct execution from scripts/
     from operation_state import initialize_or_migrate_workspace, secure_private_tree
 
@@ -182,6 +185,9 @@ def create_backup(
     state_path = private / "state.json"
     state = _read_json(state_path)
     state["last_backup_at_jst"] = created.isoformat(timespec="seconds")
+    state["last_backup_path"] = destination.relative_to(root).as_posix()
+    state["last_backup_sha256"] = _sha256_bytes(destination.read_bytes())
+    state["last_backup_verified_before_encryption"] = True
     _atomic_json(state_path, state)
     secure_private_tree(root)
     return {
@@ -189,6 +195,7 @@ def create_backup(
         "archive": destination.relative_to(root).as_posix(),
         "encrypted": encrypted,
         "verified_before_encryption": True,
+        "sha256": state["last_backup_sha256"],
         "file_count": verification["file_count"],
         "created_at_jst": created.isoformat(timespec="seconds"),
     }

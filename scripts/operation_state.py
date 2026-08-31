@@ -4,15 +4,14 @@ from __future__ import annotations
 
 import argparse
 import csv
-from datetime import date, datetime
 import json
 import os
-from pathlib import Path
 import shutil
 import tempfile
+from datetime import date, datetime
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 JST = ZoneInfo("Asia/Tokyo")
@@ -99,6 +98,45 @@ def _normalized_state(state: dict[str, Any]) -> dict[str, Any]:
         "annual_promotion": reviews.get("annual_promotion"),
     }
     normalized.setdefault("last_backup_at_jst", None)
+    normalized.setdefault("last_backup_path", None)
+    normalized.setdefault("last_backup_sha256", None)
+    normalized.setdefault("last_backup_verified_before_encryption", False)
+    return normalized
+
+
+def _normalized_source_config(
+    config: dict[str, Any], template: dict[str, Any]
+) -> dict[str, Any]:
+    version = str(config.get("schema_version", ""))
+    if version not in {"1.0", "1.1"}:
+        raise ValueError(f"unsupported source config schema: {version!r}")
+    normalized = {**template, **config}
+    for section in ("price_source", "edinet", "manual_primary_sources"):
+        normalized[section] = {
+            **template.get(section, {}),
+            **config.get(section, {}),
+        }
+    normalized["schema_version"] = "1.1"
+    normalized.pop("jquants", None)
+    return normalized
+
+
+def _normalized_policy(
+    policy: dict[str, Any], template: dict[str, Any]
+) -> dict[str, Any]:
+    if policy.get("schema_version") != "1.0":
+        return policy
+    normalized = dict(policy)
+    gates = policy.get("live_gates")
+    evidence = policy.get("live_gate_evidence")
+    normalized["live_gates"] = {
+        **template.get("live_gates", {}),
+        **(gates if isinstance(gates, dict) else {}),
+    }
+    normalized["live_gate_evidence"] = {
+        **template.get("live_gate_evidence", {}),
+        **(evidence if isinstance(evidence, dict) else {}),
+    }
     return normalized
 
 
@@ -141,6 +179,22 @@ def _planned_migrations(root: Path) -> list[tuple[Path, Path | None]]:
         state = json.loads(state_path.read_text(encoding="utf-8"))
         if _normalized_state(state) != state:
             planned.append((state_path, None))
+    source_config_path = private / "source-config.json"
+    if source_config_path.is_file():
+        source_config = json.loads(source_config_path.read_text(encoding="utf-8"))
+        source_template = json.loads(
+            (templates / "source-config-template.json").read_text(encoding="utf-8")
+        )
+        if _normalized_source_config(source_config, source_template) != source_config:
+            planned.append((source_config_path, None))
+    policy_path = private / "operation-policy.json"
+    if policy_path.is_file():
+        policy = json.loads(policy_path.read_text(encoding="utf-8"))
+        policy_template = json.loads(
+            (templates / "operation-policy.json").read_text(encoding="utf-8")
+        )
+        if _normalized_policy(policy, policy_template) != policy:
+            planned.append((policy_path, None))
     for private_name, template_name in CSV_MIGRATIONS.items():
         path = private / private_name
         template = templates / template_name
@@ -213,12 +267,35 @@ def initialize_or_migrate_workspace(
         created.append(_relative(destination, root))
 
     migrated: list[str] = []
-    from_schema = STATE_SCHEMA_VERSION
+    schema_changes: list[tuple[str, str, str]] = []
     for path, template in planned:
         if path.name == "state.json":
             state = json.loads(path.read_text(encoding="utf-8"))
-            from_schema = str(state.get("schema_version"))
+            source_schema = str(state.get("schema_version"))
             _atomic_write_json(path, _normalized_state(state))
+            schema_changes.append(("state", source_schema, STATE_SCHEMA_VERSION))
+        elif path.name == "source-config.json":
+            config = json.loads(path.read_text(encoding="utf-8"))
+            source_schema = str(config.get("schema_version"))
+            template = json.loads(
+                (templates / "source-config-template.json").read_text(encoding="utf-8")
+            )
+            normalized = _normalized_source_config(config, template)
+            _atomic_write_json(path, normalized)
+            schema_changes.append(
+                ("source-config", source_schema, str(normalized["schema_version"]))
+            )
+        elif path.name == "operation-policy.json":
+            policy = json.loads(path.read_text(encoding="utf-8"))
+            source_schema = str(policy.get("schema_version"))
+            policy_template = json.loads(
+                (templates / "operation-policy.json").read_text(encoding="utf-8")
+            )
+            normalized = _normalized_policy(policy, policy_template)
+            _atomic_write_json(path, normalized)
+            schema_changes.append(
+                ("operation-policy", source_schema, str(normalized["schema_version"]))
+            )
         else:
             if template is None:
                 raise AssertionError("CSV migration requires a template")
@@ -226,13 +303,25 @@ def initialize_or_migrate_workspace(
         migrated.append(_relative(path, root))
 
     if migrated:
+        if len(schema_changes) == 1:
+            _, from_schema, to_schema = schema_changes[0]
+        elif schema_changes:
+            from_schema = "|".join(
+                f"{name}:{version}" for name, version, _ in schema_changes
+            )
+            to_schema = "|".join(
+                f"{name}:{version}" for name, _, version in schema_changes
+            )
+        else:
+            from_schema = STATE_SCHEMA_VERSION
+            to_schema = STATE_SCHEMA_VERSION
         migration_log = private / "schema-migration-log.csv"
         with migration_log.open("a", encoding="utf-8", newline="") as destination:
             csv.writer(destination, lineterminator="\n").writerow(
                 [
                     migrated_at.isoformat(timespec="seconds"),
                     from_schema,
-                    STATE_SCHEMA_VERSION,
+                    to_schema,
                     "|".join(migrated),
                     _relative(backup, root) if backup else "",
                     "SUCCESS",

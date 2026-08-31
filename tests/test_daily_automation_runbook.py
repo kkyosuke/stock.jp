@@ -1,7 +1,6 @@
-from pathlib import Path
 import re
 import unittest
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNBOOK = ROOT / "docs/daily-automation-runbook-v0.1.md"
@@ -60,6 +59,7 @@ class DailyAutomationRunbookTest(unittest.TestCase):
             "research-results-template.md",
             "next-day-actions-template.csv",
             "watchlist.csv",
+            "global-risk-template.md",
         ):
             self.assertTrue((ROOT / "operations/templates" / filename).is_file())
 

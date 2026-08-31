@@ -8,25 +8,35 @@ from datetime import date, datetime, time, timedelta
 import hashlib
 import json
 import os
+import ssl
 from pathlib import Path
 import tempfile
 import time as time_module
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
+import certifi
+
 try:
-    from scripts.operation_state import initialize_or_migrate_workspace, secure_private_tree
+    from scripts.operation_state import (
+        initialize_or_migrate_workspace,
+        secure_private_tree,
+    )
+    from scripts.price_snapshot import validate_tracked_price_snapshot
     from scripts.run_integrity import SOURCE_FIELDS, require_run_lease
 except ModuleNotFoundError:  # Direct execution from scripts/
     from operation_state import initialize_or_migrate_workspace, secure_private_tree
+    from price_snapshot import validate_tracked_price_snapshot
     from run_integrity import SOURCE_FIELDS, require_run_lease
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 JST = ZoneInfo("Asia/Tokyo")
+TLS_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
 
 class SourceScanError(RuntimeError):
@@ -54,6 +64,18 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
 
 def _read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _source_config(root: Path, private: Path) -> dict[str, Any]:
+    template = _read_json(root / "operations/templates/source-config-template.json")
+    configured = _read_json(private / "source-config.json")
+    merged = {**template, **configured}
+    for section in ("price_source", "edinet", "manual_primary_sources"):
+        merged[section] = {
+            **template.get(section, {}),
+            **configured.get(section, {}),
+        }
+    return merged
 
 
 def _normalize_code(value: Any) -> str:
@@ -113,7 +135,7 @@ def _request_json(
         raise ValueError("max_attempts must be >= 1")
     for attempt in range(max_attempts):
         try:
-            with urlopen(request, timeout=timeout) as response:
+            with urlopen(request, timeout=timeout, context=TLS_CONTEXT) as response:
                 payload = json.loads(response.read().decode("utf-8"))
             break
         except HTTPError as error:
@@ -330,7 +352,7 @@ def scan_sources(
         run_token=run_token,
         at=started.isoformat(timespec="seconds"),
     )
-    config = _read_json(private / "source-config.json")
+    config = _source_config(root, private)
     coverage_path = run_dir / "coverage.json"
     coverage = _read_json(coverage_path)
     handoff_path = run_dir / "handoff.json"
@@ -352,6 +374,8 @@ def scan_sources(
     previous = handoff.get("previous_disclosure_cutoff_jst")
     if previous:
         scan_start = (_parse_jst(previous) - timedelta(minutes=10)).date()
+    elif fixture_dir:
+        scan_start = cutoff_at.date()
     else:
         lookback = max(1, int(config.get("initial_lookback_days", 1)))
         scan_start = cutoff_at.date() - timedelta(days=lookback - 1)
@@ -386,6 +410,59 @@ def scan_sources(
             "record_count": records,
             "error": error,
         }
+
+    price_snapshot, price_failures = validate_tracked_price_snapshot(
+        root=root,
+        active_targets=targets,
+        cutoff=cutoff_at,
+        config=config,
+    )
+    if price_snapshot:
+        record_provider(
+            "yahoo_tracked_archive",
+            "OK",
+            0,
+            int(price_snapshot["quote_count"]),
+        )
+        source_rows.append(
+            {
+                "source_id": (
+                    f"yahoo-price-{price_snapshot['price_date']}-"
+                    f"{str(price_snapshot['session_sha256'])[:12]}"
+                ),
+                "category": "market_data",
+                "code": "",
+                "title": (
+                    "Checksum-verified tracked Yahoo daily archive "
+                    f"({price_snapshot['target_count']} active targets)"
+                ),
+                "published_at_jst": (
+                    f"{price_snapshot['price_date']}T15:30:00+09:00"
+                ),
+                "retrieved_at_jst": retrieved,
+                "url": (
+                    "https://github.com/kkyosuke/stock.jp/blob/main/"
+                    f"{price_snapshot['session_path']}"
+                ),
+                "primary_source": "false",
+                "used_for_decision": "true",
+                "notes": (
+                    "unofficial secondary source; every target is present with OK OHLCV; "
+                    "official price and corporate-action confirmation remains pending"
+                ),
+            }
+        )
+    else:
+        error = "; ".join(price_failures)
+        record_provider("yahoo_tracked_archive", "ERROR", 0, 0, error)
+        gap = _gap(
+            gap_id=f"{run_id}-tracked_market_data",
+            source="tracked_market_data",
+            impact="tracked daily prices are incomplete; every price-based decision is blocked",
+            retry_after=retry_after,
+        )
+        gaps.append(gap)
+        health["blocking_gaps"].append(gap["gap_id"])
 
     edinet_config = config.get("edinet", {})
     edinet_key = environment.get(str(edinet_config.get("api_key_env", "")), "")

@@ -1,9 +1,9 @@
 import csv
 import json
-from pathlib import Path
 import shutil
-from tempfile import TemporaryDirectory
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from scripts.daily_operation import (
     PROJECT_ROOT,
@@ -99,6 +99,12 @@ def complete_artifacts(
         f"- 情報カットオフ（JST）: {source_cutoff}\n"
         "- 翌営業日: 2026-09-01\n- 対象件数: 0\n- 未解決事項: なし\n\n"
         "## 調査結果\n\n一次資料を確認済み。\n",
+        encoding="utf-8",
+    )
+    (run_dir / "global-risk.md").write_text(
+        "# 世界情勢・市場リスク確認\n\n- 状態: `COMPLETED`\n"
+        f"- 情報カットオフ（JST）: {source_cutoff}\n- 判定: `NORMAL`\n\n"
+        "公的情報を確認し、対象への重大な伝播なし。\n",
         encoding="utf-8",
     )
     actions_path = run_dir / "next-day-actions.csv"

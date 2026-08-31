@@ -1,28 +1,142 @@
-"""Initialize the workspace and report whether nightly PAPER/LIVE operation is ready."""
+"""Initialize state and report fail-closed PAPER and LIVE readiness."""
 
 from __future__ import annotations
 
 import argparse
-import csv
+import hashlib
 import json
 import os
-from pathlib import Path
 import shutil
-from typing import Any, Mapping
+from collections.abc import Mapping
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+from zoneinfo import ZoneInfo
 
 try:
     from scripts.operation_policy import policy_status
-    from scripts.operation_state import initialize_or_migrate_workspace, validate_workspace
+    from scripts.operation_state import (
+        initialize_or_migrate_workspace,
+        validate_workspace,
+    )
+    from scripts.price_snapshot import (
+        active_target_codes,
+        validate_tracked_price_snapshot,
+    )
 except ModuleNotFoundError:  # Direct execution from scripts/
     from operation_policy import policy_status
     from operation_state import initialize_or_migrate_workspace, validate_workspace
+    from price_snapshot import active_target_codes, validate_tracked_price_snapshot
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+JST = ZoneInfo("Asia/Tokyo")
+
+
+def _parse_jst(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("datetime must include a UTC offset")
+    return parsed.astimezone(JST)
 
 
 def _read_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError(f"JSON object required: {path}")
+    return value
+
+
+def _source_config(root: Path, private: Path) -> dict[str, Any]:
+    template = _read_json(root / "operations/templates/source-config-template.json")
+    configured = _read_json(private / "source-config.json")
+    merged = {**template, **configured}
+    for section in ("price_source", "edinet", "manual_primary_sources"):
+        merged[section] = {
+            **template.get(section, {}),
+            **configured.get(section, {}),
+        }
+    return merged
+
+
+def _backup_failures(
+    *, root: Path, private: Path, state: dict[str, Any], now: datetime
+) -> list[str]:
+    backup_at = state.get("last_backup_at_jst")
+    relative = state.get("last_backup_path")
+    expected_sha = str(state.get("last_backup_sha256") or "")
+    if not backup_at or not relative or not expected_sha:
+        return ["no verified operation backup has been recorded"]
+    backup = (root / str(relative)).resolve()
+    backup_root = (private / "backups").resolve()
+    if not backup.is_relative_to(backup_root):
+        return ["latest operation backup path is outside the private backup root"]
+    if not backup.is_file():
+        return ["latest verified operation backup archive is missing"]
+    if hashlib.sha256(backup.read_bytes()).hexdigest() != expected_sha:
+        return ["latest operation backup checksum does not match"]
+    try:
+        created = _parse_jst(str(backup_at))
+    except ValueError:
+        return ["latest operation backup timestamp is invalid"]
+    if created > now:
+        return ["latest operation backup timestamp is in the future"]
+    if (now.date() - created.date()).days > 31:
+        return ["latest verified operation backup is older than 31 days"]
+    if state.get("last_backup_verified_before_encryption") is not True:
+        return ["latest operation backup lacks creation-time verification evidence"]
+    return []
+
+
+def _private_evidence_failure(
+    *, root: Path, private: Path, label: str, relative: Any
+) -> str | None:
+    if not isinstance(relative, str) or not relative.strip():
+        return f"{label} evidence path is missing"
+    path = (root / relative).resolve()
+    if not path.is_relative_to(private.resolve()):
+        return f"{label} evidence path is outside operations/private"
+    if not path.is_file() or path.stat().st_size == 0:
+        return f"{label} evidence file is missing or empty"
+    return None
+
+
+def _live_evidence_failures(
+    *, root: Path, private: Path, policy: dict[str, Any], now: datetime
+) -> list[str]:
+    failures: list[str] = []
+    gates = policy.get("live_gates", {})
+    evidence = policy.get("live_gate_evidence", {})
+    if isinstance(gates, dict) and isinstance(evidence, dict):
+        for name, passed in gates.items():
+            if passed is True:
+                failure = _private_evidence_failure(
+                    root=root,
+                    private=private,
+                    label=f"LIVE gate {name}",
+                    relative=evidence.get(name),
+                )
+                if failure:
+                    failures.append(failure)
+    approval = policy.get("approval", {})
+    if isinstance(approval, dict):
+        failure = _private_evidence_failure(
+            root=root,
+            private=private,
+            label="LIVE approval",
+            relative=approval.get("evidence_path"),
+        )
+        if failure:
+            failures.append(failure)
+        approved_at = approval.get("approved_at_jst")
+        if approved_at:
+            try:
+                if _parse_jst(str(approved_at)) > now:
+                    failures.append("LIVE approval timestamp is in the future")
+            except ValueError:
+                # Policy validation reports the malformed timestamp separately.
+                pass
+    return failures
 
 
 def check_readiness(
@@ -30,66 +144,126 @@ def check_readiness(
     root: Path = PROJECT_ROOT,
     environ: Mapping[str, str] | None = None,
     fixture_dir: Path | None = None,
+    at: str | None = None,
 ) -> dict[str, Any]:
     initialization = initialize_or_migrate_workspace(root)
     environment = os.environ if environ is None else environ
     private = root / "operations/private"
-    blockers = validate_workspace(root)
-    warnings: list[str] = []
     policy = _read_json(private / "operation-policy.json")
     policy_result = policy_status(policy)
-    if not policy_result["valid"]:
-        blockers.extend(policy_result["validation_errors"])
+    config = _source_config(root, private)
+    now = _parse_jst(at) if at else datetime.now(JST)
 
-    config = _read_json(private / "source-config.json")
-    credentials: dict[str, bool] = {}
-    for provider in ("edinet",):
-        provider_config = config.get(provider, {})
-        variable = str(provider_config.get("api_key_env", ""))
-        fixture_ready = fixture_dir is not None and fixture_dir.is_dir()
-        configured = fixture_ready or bool(variable and environment.get(variable))
-        credentials[provider] = configured
-        if provider_config.get("enabled") and not configured:
-            blockers.append(f"missing environment credential: {variable or provider}")
+    edinet = config.get("edinet", {})
+    variable = str(edinet.get("api_key_env", ""))
+    fixture_ready = fixture_dir is not None and fixture_dir.is_dir()
+    edinet_configured = fixture_ready or bool(variable and environment.get(variable))
+    automatic_source_blockers = (
+        []
+        if not edinet.get("enabled") or edinet_configured
+        else [f"missing environment credential: {variable or 'edinet'}"]
+    )
+
+    targets = active_target_codes(private)
+    base_blockers = list(validate_workspace(root))
+    if not policy_result["valid"]:
+        base_blockers.extend(policy_result["validation_errors"])
+    if policy.get("broker_submission") != "HUMAN_ONLY":
+        base_blockers.append("broker submission must remain HUMAN_ONLY")
+    try:
+        if _parse_jst(str(policy.get("effective_at_jst"))) > now:
+            base_blockers.append("operation policy is not effective yet")
+    except ValueError:
+        pass
+    price_evidence: dict[str, Any] | None = None
+    if not targets:
+        base_blockers.append(
+            "active universe is empty; review the tracked full-market archive and activate candidates"
+        )
+    else:
+        price_evidence, price_failures = validate_tracked_price_snapshot(
+            root=root,
+            active_targets=targets,
+            cutoff=now,
+            config=config,
+        )
+        base_blockers.extend(price_failures)
+
+    state = _read_json(private / "state.json")
+    backup_failures = _backup_failures(
+        root=root, private=private, state=state, now=now
+    )
+    base_blockers.extend(backup_failures)
 
     mode = str(policy.get("operation_mode", ""))
-    if mode == "LIVE":
-        if not policy_result["live_orders_allowed"]:
-            blockers.append(
-                "LIVE gates incomplete: " + ", ".join(policy_result["live_gate_failures"])
-            )
-        if not shutil.which("age"):
-            blockers.append("LIVE requires the age executable for encrypted backups")
-        if not environment.get("OPERATION_BACKUP_AGE_RECIPIENT"):
-            blockers.append("LIVE requires OPERATION_BACKUP_AGE_RECIPIENT")
-    if not _read_json(private / "state.json").get("last_backup_at_jst"):
-        warnings.append("no verified backup has been recorded yet")
+    paper_blockers = list(base_blockers)
+    if mode != "PAPER":
+        paper_blockers.append("operation_mode must be PAPER for PAPER operation")
+
+    live_blockers = list(base_blockers) + automatic_source_blockers
+    live_blockers.extend(
+        _live_evidence_failures(
+            root=root, private=private, policy=policy, now=now
+        )
+    )
+    if mode != "LIVE":
+        live_blockers.append("operation_mode has not been explicitly promoted to LIVE")
+    if not policy_result["live_orders_allowed"]:
+        live_blockers.append(
+            "LIVE gates incomplete: " + ", ".join(policy_result["live_gate_failures"])
+        )
+    if not shutil.which("age"):
+        live_blockers.append("LIVE requires the age executable for encrypted backups")
+    if not environment.get("OPERATION_BACKUP_AGE_RECIPIENT"):
+        live_blockers.append("LIVE requires OPERATION_BACKUP_AGE_RECIPIENT")
+
+    warnings: list[str] = []
+    if backup_failures:
+        warnings.append("no current verified backup is available")
     if not environment.get("OPERATION_BACKUP_AGE_RECIPIENT"):
         warnings.append(
-            "OPERATION_BACKUP_AGE_RECIPIENT is unset; automatic encrypted backup is unavailable"
+            "OPERATION_BACKUP_AGE_RECIPIENT is unset; encrypted backup is unavailable"
         )
-    with (private / "portfolio-register.csv").open(
-        encoding="utf-8", newline=""
-    ) as source:
-        if not list(csv.DictReader(source)):
-            warnings.append("portfolio register has no holdings")
+    if not targets:
+        warnings.append("active holdings and watchlist universe is empty")
+    if automatic_source_blockers and config.get("paper_manual_primary_source_fallback"):
+        warnings.append(
+            "EDINET API is unavailable; PAPER requires manual EDINET, TDnet, company IR, "
+            "official price/corporate-action, JPX notice, and calendar evidence"
+        )
     warnings.append(
-        "scheduled task availability is external; confirm the desktop app and local project are available at 18:30 JST"
+        "tracked Yahoo prices are unofficial secondary data; official target prices and "
+        "corporate actions remain mandatory before a decision is finalized"
     )
+
+    paper_blockers = sorted(set(paper_blockers))
+    live_blockers = sorted(set(live_blockers))
+    active_blockers = live_blockers if mode == "LIVE" else paper_blockers
     return {
-        "status": "BLOCKED" if blockers else ("READY_WITH_WARNINGS" if warnings else "READY"),
-        "ready": not blockers,
+        "status": (
+            "BLOCKED"
+            if active_blockers
+            else ("READY_WITH_WARNINGS" if warnings else "READY")
+        ),
+        "ready": not active_blockers,
+        "paper_go": not paper_blockers,
+        "live_go": not live_blockers and policy_result["live_orders_allowed"],
         "operation_mode": mode,
         "active_rule_version": policy.get("active_rule_version"),
-        "credentials": credentials,
+        "credentials": {"edinet": edinet_configured},
         "broker_submission": policy.get("broker_submission"),
-        "blockers": sorted(set(blockers)),
+        "active_target_count": len(targets),
+        "price_snapshot": price_evidence,
+        "blockers": active_blockers,
+        "paper_blockers": paper_blockers,
+        "live_blockers": live_blockers,
+        "automatic_source_blockers": automatic_source_blockers,
         "warnings": warnings,
         "created": initialization["created"],
         "migrated": initialization["migrated"],
         "next_command": (
             ".venv/bin/python scripts/nightly_operation.py start --at <JST> --cutoff <JST>"
-            if not blockers
+            if not active_blockers
             else "resolve every blocker and rerun this check"
         ),
     }
@@ -99,12 +273,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("check", nargs="?")
     parser.add_argument("--fixture-dir", type=Path)
+    parser.add_argument("--at")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    result = check_readiness(fixture_dir=args.fixture_dir)
+    result = check_readiness(fixture_dir=args.fixture_dir, at=args.at)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result["ready"] else 1
 
