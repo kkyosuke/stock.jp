@@ -128,6 +128,12 @@ class DailyOperationTest(unittest.TestCase):
             state["last_disclosure_cutoff_jst"], "2026-08-31T18:30:00+09:00"
         )
         self.assertEqual(state["pending_reviews"], ["1234-quarterly"])
+        self.assertEqual(state["schema_version"], "2.0")
+        self.assertEqual(state["state_revision"], 1)
+        self.assertEqual(state["consecutive_successful_runs"], 1)
+        self.assertEqual(
+            state["unreconciled_ticket_ids"], ["2026-08-31-1234-BUY"]
+        )
         with (self.root / "operations/private/run-history.csv").open(
             encoding="utf-8", newline=""
         ) as history_file:
@@ -159,6 +165,7 @@ class DailyOperationTest(unittest.TestCase):
         self.assertEqual(resumed["status"], "in_progress")
         self.assertEqual(handoff["attempt"], 2)
         self.assertEqual(handoff["status"], "in_progress")
+        self.assertEqual(state["consecutive_successful_runs"], 0)
 
     def test_prepare_rejects_datetime_without_offset(self) -> None:
         with self.assertRaises(ValueError):
