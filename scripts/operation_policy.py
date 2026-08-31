@@ -22,7 +22,7 @@ REQUIRED_LIVE_GATES = {
     "backup_restore_drill",
     "personal_risk_and_broker_check",
 }
-VALID_RULE_VERSIONS = {"v0.2", "v0.3"}
+VALID_RULE_VERSIONS = {"v0.2", "v0.3", "v0.4"}
 
 
 def _is_aware_timestamp(value: Any) -> bool:
@@ -41,15 +41,15 @@ def load_policy(path: Path = DEFAULT_POLICY) -> dict[str, Any]:
 
 def validate_policy(policy: dict[str, Any]) -> list[str]:
     errors: list[str] = []
-    if policy.get("schema_version") != "1.0":
-        errors.append("schema_version must be 1.0")
+    if policy.get("schema_version") != "1.1":
+        errors.append("schema_version must be 1.1")
     if policy.get("operation_mode") not in VALID_MODES:
         errors.append("operation_mode must be PAPER, LIVE, or PAUSED")
     if policy.get("broker_submission") not in VALID_SUBMISSION:
         errors.append("broker_submission must be HUMAN_ONLY")
     active = policy.get("active_rule_version")
     if active not in VALID_RULE_VERSIONS:
-        errors.append("active_rule_version must be v0.2 or v0.3")
+        errors.append("active_rule_version must be v0.2, v0.3, or v0.4")
     shadows = policy.get("shadow_rule_versions")
     if not isinstance(shadows, list):
         errors.append("shadow_rule_versions must be a list")
@@ -87,6 +87,8 @@ def validate_policy(policy: dict[str, Any]) -> list[str]:
             errors.append(f"live gate evidence {name} must be a path or null")
     if not isinstance(policy.get("v03_holdout_promotion"), bool):
         errors.append("v03_holdout_promotion must be boolean")
+    if not isinstance(policy.get("v04_holdout_promotion"), bool):
+        errors.append("v04_holdout_promotion must be boolean")
     approval = policy.get("approval")
     if not isinstance(approval, dict):
         errors.append("approval must be an object")
@@ -116,6 +118,10 @@ def live_gate_failures(policy: dict[str, Any]) -> list[str]:
         "v03_holdout_promotion"
     ):
         failures.append("v03_holdout_promotion")
+    if policy.get("active_rule_version") == "v0.4" and not policy.get(
+        "v04_holdout_promotion"
+    ):
+        failures.append("v04_holdout_promotion")
     approval = policy.get("approval", {})
     for name in ("approved_by", "approved_at_jst", "evidence_path"):
         if not approval.get(name):

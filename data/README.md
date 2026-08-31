@@ -42,3 +42,18 @@ JPXの月次Excelは差し替えられるため、厳密な再現には取得日
 ~~~bash
 .venv/bin/python scripts/tenbagger_v02_price_exit_sim.py
 ~~~
+
+## `tenbagger-v0.4-allocation-replay-2025-*`
+
+完全取得済みの2025年公式日足243営業日を使い、2024年末までの価格・流動性だけで固定した代理12銘柄へv0.2とv0.4の資金配分を適用した12か月診断である。
+
+- `candidates.csv`: 将来価格を使わず固定した代理候補と順位
+- `trades.csv`: 100株単位・指値・各配分上限・0.15%費用を反映したモデル約定
+- `daily.csv`: v0.2/v0.4の日次資産、現金、最大DD計算用系列
+- `summary.json`: 機械可読の前提と集計
+
+point-in-time財務・開示・希薄化・SAM/SOM・MRSがないため、完全なテンバガールールのバックテストでも、最低12か月の前向きPAPERの代替でもない。詳細は[実験レポート](../docs/tenbagger-v0.4-allocation-replay-2025.md)を参照する。
+
+~~~bash
+.venv/bin/python scripts/tenbagger_v04_allocation_replay.py
+~~~
