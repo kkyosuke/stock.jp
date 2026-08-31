@@ -67,6 +67,8 @@ ChatGPTデスクトップの同じチャットに、ローカルプロジェク�
 ~~~bash
 .venv/bin/python scripts/daily_operation.py init
 .venv/bin/python scripts/operation_state.py validate
+.venv/bin/python scripts/operation_bootstrap.py check
+.venv/bin/python scripts/operation_smoke.py --days 20 --start-date 2026-09-01
 ~~~
 
 次に、次の2ファイルへ対象を登録する。
@@ -176,3 +178,5 @@ $japan-stock-operator を使って、今日の夜間運用を最後まで実行�
 - ログ量が多すぎる場合、`NO-ACTION`銘柄の個別ログを作っていないか
 
 運用ルール自体の閾値は日次運用の都合で変更しない。手順の不具合と投資仮説の成績を分けてレビューする。
+
+月次バックアップ、四半期の復元訓練、実行漏れ検知、CIについては[継続稼働準備 v0.1](operation-readiness-v0.1.md)に従う。

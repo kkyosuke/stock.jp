@@ -153,12 +153,29 @@ def build_due_tasks(
     research_queue: dict[str, Any],
     pending_review_ids: list[str] | None = None,
     source_rows: list[dict[str, str]] | None = None,
+    last_backup_at: str | None = None,
 ) -> list[dict[str, Any]]:
     current = _parse_jst(at)
     due_at = current.replace(hour=23, minute=59, second=59).isoformat(timespec="seconds")
     tasks = [
         _task(f"{run_id}-daily-event", "daily_event", "HIGH", "毎日の開示・即時撤退条件確認", due_at)
     ]
+    backup_due = not last_backup_at
+    if last_backup_at:
+        try:
+            backup_due = _parse_jst(last_backup_at) <= current - timedelta(days=31)
+        except ValueError:
+            backup_due = True
+    if backup_due:
+        tasks.append(
+            _task(
+                f"{run_id}-operations-backup",
+                "operations_backup",
+                "HIGH",
+                "暗号化バックアップが未作成または31日超過",
+                due_at,
+            )
+        )
     for review_id in pending_review_ids or []:
         if review_id:
             tasks.append(
@@ -251,6 +268,7 @@ def create_nightly_artifacts(
         plan["trading_calendar_confirmed"] = confirmed
         _, source_rows = _read_csv(run_dir / "sources.csv")
         coverage = _read_json(run_dir / "coverage.json")
+        state = _read_json(root / "operations/private/state.json")
         plan["tasks"] = build_due_tasks(
             run_id=run_id,
             at=at,
@@ -261,6 +279,7 @@ def create_nightly_artifacts(
                 str(value) for value in coverage.get("universe", {}).get("due_reviews", {}).get("expected", [])
             ],
             source_rows=source_rows,
+            last_backup_at=state.get("last_backup_at_jst"),
         )
         _atomic_json(plan_path, plan)
     else:
@@ -273,6 +292,7 @@ def create_nightly_artifacts(
             }
             _, source_rows = _read_csv(run_dir / "sources.csv")
             coverage = _read_json(run_dir / "coverage.json")
+            state = _read_json(root / "operations/private/state.json")
             refreshed = build_due_tasks(
                 run_id=run_id,
                 at=at,
@@ -283,6 +303,7 @@ def create_nightly_artifacts(
                     str(value) for value in coverage.get("universe", {}).get("due_reviews", {}).get("expected", [])
                 ],
                 source_rows=source_rows,
+                last_backup_at=state.get("last_backup_at_jst"),
             )
             plan["generated_at_jst"] = plan.get("generated_at_jst") or _parse_jst(at).isoformat(timespec="seconds")
             plan["next_trading_date"] = next_date
@@ -388,6 +409,13 @@ def validate_nightly_artifacts(
         text = str(value or "").replace("|", ";").replace(",", ";")
         return [item.strip() for item in text.split(";") if item.strip()]
 
+    def unknown_evidence(values: list[str]) -> list[str]:
+        return sorted(
+            value
+            for value in set(values)
+            if value not in valid_evidence_ids and not value.startswith("internal:")
+        )
+
     plan = _read_json(run_dir / "work-plan.json")
     if plan.get("run_id") != run_id or not plan.get("generated_at_jst"):
         errors.append("work plan was not generated for this run")
@@ -405,7 +433,7 @@ def validate_nightly_artifacts(
         if status == "COMPLETED" and not task.get("evidence_source_ids"):
             errors.append(f"completed work-plan task lacks evidence: {task_id or '<blank>'}")
         if status == "COMPLETED":
-            unknown = sorted(set(evidence_ids(task.get("evidence_source_ids"))) - valid_evidence_ids)
+            unknown = unknown_evidence(evidence_ids(task.get("evidence_source_ids")))
             if unknown:
                 errors.append(
                     f"work-plan task {task_id or '<blank>'} cites unknown evidence: {', '.join(unknown)}"
@@ -447,7 +475,7 @@ def validate_nightly_artifacts(
             errors.append(f"action {action_id or '<blank>'} requires rule_ids")
         if not row.get("evidence_source_ids", "").strip():
             errors.append(f"action {action_id or '<blank>'} requires evidence_source_ids")
-        unknown = sorted(set(evidence_ids(row.get("evidence_source_ids"))) - valid_evidence_ids)
+        unknown = unknown_evidence(evidence_ids(row.get("evidence_source_ids")))
         if unknown:
             errors.append(
                 f"action {action_id or '<blank>'} cites unknown evidence: {', '.join(unknown)}"

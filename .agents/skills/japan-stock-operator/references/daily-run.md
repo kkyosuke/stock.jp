@@ -14,6 +14,8 @@ Use this workflow when the request is “today's run,” a scheduled operation, 
 
 Process every task in both `research-queue.json` and `work-plan.json`. Check company IR and JPX notices in their primary sites even when the machine APIs succeed. Mark a task `COMPLETED` only with `evidence_source_ids`; defer it only by copying the same task ID into `handoff.pending_reviews`.
 
+When an `operations_backup` task is due, run `scripts/operation_backup.py create --at <current aware JST timestamp>`. It uses `OPERATION_BACKUP_AGE_RECIPIENT` when configured. Never add `--allow-plaintext` unless the user explicitly authorized a plaintext PAPER backup. Record the resulting private archive path as `internal:backup:<path>` evidence; if encryption is unavailable, defer the task and report the setup action.
+
 Check all current holdings and pending orders. Check active watchlist names for new official disclosures, but do not fully rescore every watchlist name every day. Use the prior successful disclosure cutoff as the lower bound and the declared current cutoff as the upper bound.
 
 Include other modes only when due:

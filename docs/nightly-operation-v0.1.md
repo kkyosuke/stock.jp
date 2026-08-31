@@ -105,3 +105,5 @@ $japan-stock-operator を使って、今日の夜間運用を最後まで実行�
 - [TDnet API](https://www.jpx.co.jp/markets/paid-info-listing/tdnet/02.html)
 
 APIの成功は企業IRとJPX個別確認の代替ではない。売買判断に使う事実は一次資料へ結び付ける。
+
+バックアップ、実行漏れ検知、初回診断、20営業日試験は[継続稼働準備 v0.1](operation-readiness-v0.1.md)に従う。

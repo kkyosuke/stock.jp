@@ -1,0 +1,41 @@
+name: operation-tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install project and skill-validator dependencies
+        run: python -m pip install "xlrd==2.0.2" PyYAML
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
+      - name: Compile Python
+        run: python -m compileall -q scripts tests
+      - name: Validate operator skill
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import yaml
+
+          skill = Path('.agents/skills/japan-stock-operator/SKILL.md').read_text()
+          assert skill.startswith('---\n')
+          metadata = yaml.safe_load(skill.split('---\n', 2)[1])
+          assert metadata['name'] == 'japan-stock-operator'
+          config = yaml.safe_load(
+              Path('.agents/skills/japan-stock-operator/agents/openai.yaml').read_text()
+          )
+          assert '$japan-stock-operator' in config['interface']['default_prompt']
+          PY
+      - name: Twenty-day offline operation smoke
+        run: python scripts/operation_smoke.py --days 20 --start-date 2026-09-01
