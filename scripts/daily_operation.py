@@ -20,13 +20,31 @@ try:
 except ModuleNotFoundError:  # Direct execution: python scripts/daily_operation.py
     from operation_state import initialize_or_migrate_workspace, secure_private_tree
 
+try:
+    from scripts.run_integrity import (
+        SOURCE_FIELDS,
+        acquire_run_lease,
+        advance_source_watermarks,
+        release_run_lease,
+        require_run_lease,
+        validate_run_artifacts,
+        write_coverage_manifest,
+    )
+except ModuleNotFoundError:  # Direct execution: python scripts/daily_operation.py
+    from run_integrity import (
+        SOURCE_FIELDS,
+        acquire_run_lease,
+        advance_source_watermarks,
+        release_run_lease,
+        require_run_lease,
+        validate_run_artifacts,
+        write_coverage_manifest,
+    )
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 JST = ZoneInfo("Asia/Tokyo")
-SOURCE_HEADER = (
-    "source_id,category,code,title,published_at_jst,retrieved_at_jst,url,"
-    "primary_source,used_for_decision,notes\n"
-)
+SOURCE_HEADER = ",".join(SOURCE_FIELDS) + "\n"
 
 
 def _parse_jst(value: str) -> datetime:
@@ -74,7 +92,9 @@ def initialize_workspace(root: Path = PROJECT_ROOT) -> dict[str, Any]:
     return initialize_or_migrate_workspace(root)
 
 
-def prepare_run(*, at: str, root: Path = PROJECT_ROOT) -> dict[str, Any]:
+def prepare_run(
+    *, at: str, run_token: str | None = None, root: Path = PROJECT_ROOT
+) -> dict[str, Any]:
     initialize_workspace(root)
     started = _parse_jst(at)
     started_iso = started.isoformat(timespec="seconds")
@@ -89,7 +109,30 @@ def prepare_run(*, at: str, root: Path = PROJECT_ROOT) -> dict[str, Any]:
         if not handoff_path.is_file():
             raise FileNotFoundError(f"existing run is missing {handoff_path}")
         handoff = _read_json(handoff_path)
-        if handoff["status"] == "failed":
+        if handoff["status"] == "completed":
+            return {
+                "run_id": run_id,
+                "resumed": True,
+                "status": "completed",
+                "run_dir": _relative(run_dir, root),
+                "report": _relative(run_dir / "report.md", root),
+                "orders": _relative(run_dir / "orders.csv", root),
+                "sources": _relative(run_dir / "sources.csv", root),
+                "coverage": _relative(run_dir / "coverage.json", root),
+                "handoff": _relative(handoff_path, root),
+            }
+        lease = acquire_run_lease(
+            run_dir=run_dir, run_id=run_id, at=started_iso, run_token=run_token
+        )
+        if not lease["acquired"]:
+            return {
+                "run_id": run_id,
+                "resumed": False,
+                "status": "locked",
+                "lease_expires_at_jst": lease["expires_at_jst"],
+                "run_dir": _relative(run_dir, root),
+            }
+        if handoff["status"] == "failed" or lease.get("reclaimed"):
             handoff.update(
                 {
                     "status": "in_progress",
@@ -112,10 +155,15 @@ def prepare_run(*, at: str, root: Path = PROJECT_ROOT) -> dict[str, Any]:
             "report": _relative(run_dir / "report.md", root),
             "orders": _relative(run_dir / "orders.csv", root),
             "sources": _relative(run_dir / "sources.csv", root),
+            "coverage": _relative(run_dir / "coverage.json", root),
             "handoff": _relative(handoff_path, root),
+            "lease": _relative(run_dir / "lease.json", root),
+            "run_token": lease["run_token"],
+            "lease_expires_at_jst": lease["expires_at_jst"],
         }
 
     run_dir.mkdir(parents=True)
+    lease = acquire_run_lease(run_dir=run_dir, run_id=run_id, at=started_iso)
     previous_cutoff = state.get("last_disclosure_cutoff_jst")
     report = (root / "operations/templates/daily-report-template.md").read_text(
         encoding="utf-8"
@@ -133,6 +181,7 @@ def prepare_run(*, at: str, root: Path = PROJECT_ROOT) -> dict[str, Any]:
         run_dir / "orders.csv",
     )
     (run_dir / "sources.csv").write_text(SOURCE_HEADER, encoding="utf-8")
+    write_coverage_manifest(root=root, run_dir=run_dir, run_id=run_id, state=state)
     pretrade = (
         root / "operations/templates/pretrade-check-template.md"
     ).read_text(encoding="utf-8")
@@ -171,7 +220,11 @@ def prepare_run(*, at: str, root: Path = PROJECT_ROOT) -> dict[str, Any]:
         "report": _relative(run_dir / "report.md", root),
         "orders": _relative(run_dir / "orders.csv", root),
         "sources": _relative(run_dir / "sources.csv", root),
+        "coverage": _relative(run_dir / "coverage.json", root),
         "handoff": _relative(handoff_path, root),
+        "lease": _relative(run_dir / "lease.json", root),
+        "run_token": lease["run_token"],
+        "lease_expires_at_jst": lease["expires_at_jst"],
     }
 
 
@@ -268,6 +321,7 @@ def complete_run(
     source_cutoff: str,
     price_date: str,
     summary: str,
+    run_token: str,
     alert_count: int = 0,
     root: Path = PROJECT_ROOT,
 ) -> dict[str, Any]:
@@ -300,13 +354,19 @@ def complete_run(
         return {"run_id": run_id, "status": "completed", "already_closed": True}
     if handoff["status"] != "in_progress":
         raise ValueError(f"cannot complete run with status {handoff['status']}")
-    for required in ("report.md", "orders.csv", "sources.csv", "pretrade-check.md"):
-        if not (run_dir / required).is_file():
-            raise FileNotFoundError(f"run is missing {required}")
+    require_run_lease(run_dir=run_dir, run_token=run_token, at=completed_iso)
 
     previous_cutoff = handoff.get("previous_disclosure_cutoff_jst")
     if previous_cutoff and _parse_jst(cutoff_iso) < _parse_jst(previous_cutoff):
         raise ValueError("source cutoff cannot move backwards")
+
+    integrity = validate_run_artifacts(
+        root=root,
+        run_id=run_id,
+        completed_at=completed_iso,
+        source_cutoff=cutoff_iso,
+        price_date=price_date,
+    )
 
     handoff.update(
         {
@@ -320,6 +380,13 @@ def complete_run(
     )
     _atomic_write_json(handoff_path, handoff)
     _persist_completed_state(root=root, handoff=handoff)
+    advance_source_watermarks(
+        root=root,
+        source_cutoff=cutoff_iso,
+        coverage=integrity["coverage"],
+        source_rows=integrity["source_rows_data"],
+    )
+    release_run_lease(run_dir=run_dir, run_token=run_token, at=completed_iso)
     data_gap_count = len(handoff.get("data_gaps", []))
     if not _history_has_attempt_status(
         root=root,
@@ -348,6 +415,7 @@ def fail_run(
     run_id: str,
     completed_at: str,
     summary: str,
+    run_token: str,
     root: Path = PROJECT_ROOT,
 ) -> dict[str, Any]:
     _validate_run_id(run_id)
@@ -372,10 +440,12 @@ def fail_run(
         return {"run_id": run_id, "status": "failed", "already_closed": True}
     if handoff["status"] != "in_progress":
         raise ValueError(f"cannot fail run with status {handoff['status']}")
+    failed_at = _iso_jst(completed_at)
+    require_run_lease(run_dir=handoff_path.parent, run_token=run_token, at=failed_at)
     handoff.update(
         {
             "status": "failed",
-            "completed_at_jst": _iso_jst(completed_at),
+            "completed_at_jst": failed_at,
             "summary": summary.strip(),
         }
     )
@@ -385,6 +455,9 @@ def fail_run(
     state["state_revision"] = state.get("state_revision", 0) + 1
     state["consecutive_successful_runs"] = 0
     _atomic_write_json(state_path, state)
+    release_run_lease(
+        run_dir=handoff_path.parent, run_token=run_token, at=failed_at
+    )
     if not _history_has_attempt_status(
         root=root,
         run_id=run_id,
@@ -411,17 +484,20 @@ def parse_args() -> argparse.Namespace:
     commands.add_parser("init")
     prepare = commands.add_parser("prepare")
     prepare.add_argument("--at", required=True)
+    prepare.add_argument("--run-token")
     complete = commands.add_parser("complete")
     complete.add_argument("--run-id", required=True)
     complete.add_argument("--completed-at", required=True)
     complete.add_argument("--source-cutoff", required=True)
     complete.add_argument("--price-date", required=True)
     complete.add_argument("--summary", required=True)
+    complete.add_argument("--run-token", required=True)
     complete.add_argument("--alert-count", type=int, default=0)
     fail = commands.add_parser("fail")
     fail.add_argument("--run-id", required=True)
     fail.add_argument("--completed-at", required=True)
     fail.add_argument("--summary", required=True)
+    fail.add_argument("--run-token", required=True)
     commands.add_parser("status")
     return parser.parse_args()
 
@@ -431,7 +507,7 @@ def main() -> None:
     if args.command == "init":
         result = initialize_workspace()
     elif args.command == "prepare":
-        result = prepare_run(at=args.at)
+        result = prepare_run(at=args.at, run_token=args.run_token)
     elif args.command == "complete":
         result = complete_run(
             run_id=args.run_id,
@@ -439,6 +515,7 @@ def main() -> None:
             source_cutoff=args.source_cutoff,
             price_date=args.price_date,
             summary=args.summary,
+            run_token=args.run_token,
             alert_count=args.alert_count,
         )
     elif args.command == "fail":
@@ -446,6 +523,7 @@ def main() -> None:
             run_id=args.run_id,
             completed_at=args.completed_at,
             summary=args.summary,
+            run_token=args.run_token,
         )
     else:
         result = read_status()
