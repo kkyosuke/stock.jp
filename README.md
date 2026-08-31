@@ -13,6 +13,8 @@
 
 ## Research rules
 
+- [全銘柄日次株価のGitHub Actions運用 v0.1](docs/daily-stock-price-actions-v0.1.md) — JPX銘柄一覧とYahoo Finance chart endpointによるOHLCV収集・PR作成
+
 - [日本株テンバガー判定・運用ルール v0.3](docs/tenbagger-rule-v0.3.md) — 5倍時の原資回収と候補がある場合だけの再配分を含む凍結済みチャレンジャー
 - [日本株テンバガー判定・運用ルール v0.2](docs/tenbagger-rule-v0.2.md) — 現行のペーパートレード用ルール
 - [v0.2価格ルール適用時の参考損益（2016–2026年）](docs/tenbagger-v0.2-price-only-pnl-2016-2026.md) — 現存テンバガー83銘柄の銘柄別・合計診断

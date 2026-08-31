@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "source": {
+    "provider": "Yahoo Finance",
+    "endpoint": "/v8/finance/chart/<code>.T",
+    "official": false
+  },
+  "universe": {
+    "provider": "JPX TSE-listed issues monthly spreadsheet",
+    "scope": "current domestic stocks",
+    "count": 3713
+  },
+  "latest_trading_date": "2026-08-31",
+  "fetch": {
+    "success_count": 3713,
+    "error_count": 0,
+    "error_codes": []
+  },
+  "latest_session": {
+    "date": "2026-08-31",
+    "file": "2026/2026-08-31.csv",
+    "sha256": "019db4bc27932bafb0040443e9c2bb9d2fc33c5018fb884a5daaac6ec0a96d8a",
+    "quote_count": 3669,
+    "no_quote_count": 44,
+    "fetch_error_count": 0
+  }
+}
