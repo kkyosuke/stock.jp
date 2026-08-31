@@ -111,11 +111,48 @@ def _normalized_source_config(
     if version not in {"1.0", "1.1"}:
         raise ValueError(f"unsupported source config schema: {version!r}")
     normalized = {**template, **config}
-    for section in ("price_source", "edinet", "manual_primary_sources"):
+    configured_price = config.get("price_source", {})
+    if not isinstance(configured_price, dict):
+        configured_price = {}
+    template_price = template.get("price_source", {})
+    normalized["price_source"] = {
+        key: configured_price.get(key, value)
+        for key, value in template_price.items()
+    }
+    # The tracked Git archive replaces the legacy direct Yahoo collector. Its
+    # identity and path are canonical; old URL, range, batch and universe
+    # settings must not silently select the removed collector.
+    normalized["price_source"]["provider"] = template_price["provider"]
+    normalized["price_source"]["manifest_path"] = template_price["manifest_path"]
+    normalized["price_source"]["minimum_daily_archive_coverage"] = max(
+        float(template_price["minimum_daily_archive_coverage"]),
+        float(
+            configured_price.get(
+                "minimum_daily_archive_coverage",
+                template_price["minimum_daily_archive_coverage"],
+            )
+        ),
+    )
+    normalized["price_source"]["minimum_active_target_coverage"] = 1.0
+    normalized["price_source"]["maximum_latest_price_age_days"] = min(
+        int(template_price["maximum_latest_price_age_days"]),
+        int(
+            configured_price.get(
+                "maximum_latest_price_age_days",
+                template_price["maximum_latest_price_age_days"],
+            )
+        ),
+    )
+    for section in ("edinet", "manual_primary_sources"):
+        configured_section = config.get(section, {})
         normalized[section] = {
             **template.get(section, {}),
-            **config.get(section, {}),
+            **(configured_section if isinstance(configured_section, dict) else {}),
         }
+    normalized["initial_lookback_days"] = max(
+        int(template.get("initial_lookback_days", 7)),
+        int(config.get("initial_lookback_days", 0)),
+    )
     normalized["schema_version"] = "1.1"
     normalized.pop("jquants", None)
     return normalized

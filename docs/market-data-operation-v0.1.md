@@ -14,6 +14,8 @@
 
 不合格なら前日値で補完せず、`nightly_operation.py start`をrun作成前に停止する。
 
+保有・active watchlistが0件でも、全市場archive自体が正常ならPAPERを開始できる。その場合は個別注文を作らず`GLOBAL / NO-ACTION`を保存し、初回の全市場候補レビューを必須タスクにする。AIは蓄積済み日足で候補を絞り、一次資料を確認してから少数だけactive watchlistへ登録する。
+
 ## 取得と利用の分離
 
 | 範囲 | 取得頻度 | 用途 |

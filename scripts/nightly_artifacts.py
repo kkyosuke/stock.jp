@@ -153,6 +153,7 @@ def build_due_tasks(
     pending_review_ids: list[str] | None = None,
     source_rows: list[dict[str, str]] | None = None,
     last_backup_at: str | None = None,
+    initial_universe_review_due: bool = False,
 ) -> list[dict[str, Any]]:
     current = _parse_jst(at)
     due_at = current.replace(hour=23, minute=59, second=59).isoformat(timespec="seconds")
@@ -166,6 +167,16 @@ def build_due_tasks(
             due_at,
         ),
     ]
+    if initial_universe_review_due:
+        tasks.append(
+            _task(
+                f"{run_id}-initial-universe-review",
+                "initial_universe_review",
+                "HIGH",
+                "監視対象0件: 蓄積済み全市場日足から長期候補を抽出し、一次資料確認対象を絞る",
+                due_at,
+            )
+        )
     backup_due = not last_backup_at
     if last_backup_at:
         try:
@@ -294,6 +305,13 @@ def create_nightly_artifacts(
             ],
             source_rows=source_rows,
             last_backup_at=state.get("last_backup_at_jst"),
+            initial_universe_review_due=(
+                not state.get("last_run_id")
+                and not any(
+                    coverage.get("universe", {}).get(name, {}).get("expected", [])
+                    for name in ("holdings", "watchlist")
+                )
+            ),
         )
         _atomic_json(plan_path, plan)
     else:
@@ -318,6 +336,13 @@ def create_nightly_artifacts(
                 ],
                 source_rows=source_rows,
                 last_backup_at=state.get("last_backup_at_jst"),
+                initial_universe_review_due=(
+                    not state.get("last_run_id")
+                    and not any(
+                        coverage.get("universe", {}).get(name, {}).get("expected", [])
+                        for name in ("holdings", "watchlist")
+                    )
+                ),
             )
             plan["generated_at_jst"] = plan.get("generated_at_jst") or _parse_jst(at).isoformat(timespec="seconds")
             plan["next_trading_date"] = next_date

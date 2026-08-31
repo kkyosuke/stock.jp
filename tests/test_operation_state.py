@@ -148,6 +148,13 @@ class OperationStateTest(unittest.TestCase):
         legacy = {
             "schema_version": "1.0",
             "jquants": {"enabled": True},
+            "price_source": {
+                "provider": "yahoo_finance_unofficial",
+                "base_urls": ["https://query1.finance.yahoo.com"],
+                "minimum_daily_archive_coverage": 0.5,
+                "minimum_active_target_coverage": 0.5,
+                "maximum_latest_price_age_days": 30,
+            },
         }
         config_path.write_text(json.dumps(legacy) + "\n", encoding="utf-8")
 
@@ -165,6 +172,16 @@ class OperationStateTest(unittest.TestCase):
             "yahoo_finance_unofficial_tracked_archive",
         )
         self.assertNotIn("jquants", migrated)
+        self.assertNotIn("base_urls", migrated["price_source"])
+        self.assertEqual(
+            migrated["price_source"]["minimum_daily_archive_coverage"], 0.98
+        )
+        self.assertEqual(
+            migrated["price_source"]["minimum_active_target_coverage"], 1.0
+        )
+        self.assertEqual(
+            migrated["price_source"]["maximum_latest_price_age_days"], 7
+        )
         self.assertEqual(entries[-1]["from_schema"], "1.0")
         self.assertEqual(entries[-1]["to_schema"], "1.1")
 

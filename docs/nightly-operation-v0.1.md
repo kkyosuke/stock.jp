@@ -16,7 +16,7 @@
 2. `nightly_operation.py start`でreadinessを再確認し、状態検証、同時実行ロック、当日フォルダ作成、EDINET取得、一次サイト確認タスク、期限到来タスクを一括作成する。
 3. `research-queue.json`と`work-plan.json`を一次資料で処理し、会社IR、TDnet、公式価格・コーポレートアクション、EDINET、JPX現物株カレンダーを確認する。YahooはPAPERの二次価格源であり、一次資料確認の代替にしない。完了できない項目は理由と期限を付けて`DEFERRED`にし、同じIDを`handoff.pending_reviews`へ残す。
 4. `global-risk.md`へ為替、金利、資源、主要国政策、地政学を「事実→保有KPIへの伝播→判断」に分けて記録する。
-5. 保有銘柄と監視銘柄を漏れなく`next-day-actions.csv`へ記録する。対象が0件ならreadinessで停止する。
+5. 保有銘柄と監視銘柄を漏れなく`next-day-actions.csv`へ記録する。対象が0件なら`GLOBAL / NO-ACTION`を記録し、`initial_universe_review`で蓄積済み全市場日足から長期候補を抽出する。候補は買い判断にせず、一次資料を読む対象として絞る。
 6. `BUY / ADD / REDUCE / SELL`なら、ルールID、一次資料ID、個別判断ログを揃えた後で`order_ticket.py propose`を使う。注文票とアクション、未照合注文、取引イベント台帳は同時に更新される。
 7. `research-results.md`と`report.md`を完成させ、カバレッジを閉じる。
 8. `nightly_operation.py finalize`を実行する。必須成果物、`global-risk.md`、全対象、全タスク、アクションと注文票の対応に不足があれば完了は拒否される。

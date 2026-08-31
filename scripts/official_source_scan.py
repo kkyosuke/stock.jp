@@ -564,27 +564,31 @@ def scan_sources(
         health["blocking_gaps"].append(gap["gap_id"])
         coverage["official_sources"]["edinet"]["status"] = "UNAVAILABLE"
 
-    # TDnet, official closing prices and the cash-equity calendar are checked
-    # against their first-party public pages by the research agent. Until that
-    # evidence is attached, fail closed instead of treating a secondary feed as
-    # authoritative.
-    manual_checks = (
+    # TDnet and the cash-equity calendar are always checked against first-party
+    # public pages. Official target prices are required only when a holding or
+    # active watchlist target exists; an empty-universe candidate review cannot
+    # create an order and therefore has no target price to confirm.
+    manual_checks = [
         (
             "tdnet",
             "material timely disclosures could be missing; trade decisions are blocked",
             "Check TDnet disclosures through the cutoff and attach query evidence",
         ),
         (
-            "official_market_data",
-            "official price inputs are incomplete; new and additional buys are blocked",
-            "Confirm target prices and corporate actions with JPX, company IR, or brokerage evidence",
-        ),
-        (
             "trading_calendar",
             "the next trading date is unconfirmed; order tickets are blocked",
             "Confirm the next cash-equity trading date with JPX calendar evidence",
         ),
-    )
+    ]
+    if targets:
+        manual_checks.insert(
+            1,
+            (
+                "official_market_data",
+                "official price inputs are incomplete; new and additional buys are blocked",
+                "Confirm target prices and corporate actions with JPX, company IR, or brokerage evidence",
+            ),
+        )
     for source, impact, reason in manual_checks:
         gap = _gap(
             gap_id=f"{run_id}-{source}",

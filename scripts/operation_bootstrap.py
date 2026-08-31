@@ -176,18 +176,13 @@ def check_readiness(
     except ValueError:
         pass
     price_evidence: dict[str, Any] | None = None
-    if not targets:
-        base_blockers.append(
-            "active universe is empty; review the tracked full-market archive and activate candidates"
-        )
-    else:
-        price_evidence, price_failures = validate_tracked_price_snapshot(
-            root=root,
-            active_targets=targets,
-            cutoff=now,
-            config=config,
-        )
-        base_blockers.extend(price_failures)
+    price_evidence, price_failures = validate_tracked_price_snapshot(
+        root=root,
+        active_targets=targets,
+        cutoff=now,
+        config=config,
+    )
+    base_blockers.extend(price_failures)
 
     state = _read_json(private / "state.json")
     backup_failures = _backup_failures(
@@ -225,7 +220,10 @@ def check_readiness(
             "OPERATION_BACKUP_AGE_RECIPIENT is unset; encrypted backup is unavailable"
         )
     if not targets:
-        warnings.append("active holdings and watchlist universe is empty")
+        warnings.append(
+            "active universe is empty; PAPER is limited to GLOBAL NO-ACTION and "
+            "an initial full-market candidate review until candidates are activated"
+        )
     if automatic_source_blockers and config.get("paper_manual_primary_source_fallback"):
         warnings.append(
             "EDINET API is unavailable; PAPER requires manual EDINET, TDnet, company IR, "

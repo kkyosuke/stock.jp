@@ -9,7 +9,7 @@
 .venv/bin/python scripts/operation_bootstrap.py check
 ~~~
 
-`paper_go: true`になるまでPAPERを始めず、`live_go: true`になるまでLIVEへ昇格しない。PAPERは状態スキーマ、運用ポリシー、active対象1件以上、マージ済み株価archive、31日以内の検証済みバックアップを必須とする。EDINET APIキーがないPAPERは手動一次資料fallbackを許すが、確認できない判断は`WAIT`または`fail`にする。APIキーはファイルやチャットへ保存せず、実行環境の`EDINET_API_KEY`へ設定する。暗号化バックアップを夜間運用内で実行するには、公開受信者文字列を`OPERATION_BACKUP_AGE_RECIPIENT`へ設定する。
+`paper_go: true`になるまでPAPERを始めず、`live_go: true`になるまでLIVEへ昇格しない。PAPERは状態スキーマ、運用ポリシー、マージ済み株価archive、31日以内の検証済みバックアップを必須とする。active対象0件は許可し、`GLOBAL / NO-ACTION`と初回全市場候補レビューだけを行う。EDINET APIキーがないPAPERは手動一次資料fallbackを許すが、確認できない判断は`WAIT`または`fail`にする。APIキーはファイルやチャットへ保存せず、実行環境の`EDINET_API_KEY`へ設定する。暗号化バックアップを夜間運用内で実行するには、公開受信者文字列を`OPERATION_BACKUP_AGE_RECIPIENT`へ設定する。
 
 株価archiveは`data/daily-prices/latest.json`と対応CSVを使い、SHA-256、全市場98%以上、active対象100%、未来日でないこと、7日以内の鮮度を検証する。Yahoo Financeは非公式の二次データなので、注文判断には公式価格・コーポレートアクションと会社一次資料を別途確認する。
 
@@ -44,11 +44,31 @@
 
 非公開状態には数量、価格、資金ログが含まれる。バックアップも機密情報として扱う。推奨は`age`暗号化である。
 
+macOSでは一度だけ`age`を準備し、秘密鍵をリポジトリ外へ作る。秘密鍵をGit、チャット、運用ログへ貼らない。
+
+~~~bash
+brew install age
+age-keygen -o /利用者が管理する安全な場所/stock-jp-backup-key.txt
+age-keygen -y /利用者が管理する安全な場所/stock-jp-backup-key.txt
+~~~
+
+最後のコマンドが表示する`age1...`公開鍵を次の`--age-recipient`へ渡す。
+
 ~~~bash
 .venv/bin/python scripts/operation_backup.py create \
   --at 2026-09-01T20:00:00+09:00 \
   --age-recipient 'age1...'
 ~~~
+
+成功時に`status: CREATED`、`encrypted: true`、`verified_before_encryption: true`、`sha256`が表示され、`state.json`へ同じ証拠が記録される。続けて出力されたarchive pathを秘密鍵で検証する。
+
+~~~bash
+.venv/bin/python scripts/operation_backup.py verify \
+  --archive operations/private/backups/operation-YYYYMMDDTHHMMSS+0900.zip.age \
+  --age-identity /利用者が管理する安全な場所/stock-jp-backup-key.txt
+~~~
+
+`valid: true`を確認した後に`operation_bootstrap.py check`を再実行する。現在の環境には`age`がないため、インストールと鍵の保管場所は利用者側の準備が必要である。
 
 `PAPER`で暗号化環境を準備する前だけ、危険を理解した上で`--allow-plaintext`を明示できる。`LIVE`はこの例外を認めず、`age`と受信者指定が必須である。バックアップは`operations/private/backups/`に置かれGit追跡されない。端末故障に備える複製先は、利用者が管理する暗号化ストレージとする。
 
