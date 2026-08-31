@@ -180,6 +180,47 @@ class OfficialSourceScanTest(unittest.TestCase):
         )
         report_path.write_text(report, encoding="utf-8")
 
+        plan_path = run_dir / "work-plan.json"
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        plan.update(
+            {
+                "status": "COMPLETED",
+                "next_trading_date": "2026-09-01",
+                "trading_calendar_confirmed": True,
+            }
+        )
+        for task in plan["tasks"]:
+            task["status"] = "COMPLETED"
+            task["evidence_source_ids"] = ["company-ir-1234"]
+        plan_path.write_text(
+            json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        (run_dir / "research-results.md").write_text(
+            "# 夜間調査結果\n\n- 状態: `COMPLETED`\n"
+            "- 情報カットオフ（JST）: 2026-08-31T18:30:00+09:00\n"
+            "- 翌営業日: 2026-09-01\n- 対象件数: 1\n- 未解決事項: なし\n\n"
+            "## 調査結果\n\n一次資料を確認し、継続保有と判定。\n",
+            encoding="utf-8",
+        )
+        actions_path = run_dir / "next-day-actions.csv"
+        with actions_path.open(encoding="utf-8", newline="") as source:
+            reader = csv.DictReader(source)
+            fields = list(reader.fieldnames or [])
+            actions = list(reader)
+        actions[0].update(
+            {
+                "next_action": "KEEP",
+                "rule_ids": "H-1",
+                "trigger_condition": "即時撤退条件なし",
+                "human_action": "なし",
+                "evidence_source_ids": "company-ir-1234;jpx-notices-check",
+            }
+        )
+        with actions_path.open("w", encoding="utf-8", newline="") as destination:
+            writer = csv.DictWriter(destination, fieldnames=fields)
+            writer.writeheader()
+            writer.writerows(actions)
+
         result = complete_run(
             run_id="2026-08-31",
             completed_at="2026-08-31T19:00:00+09:00",

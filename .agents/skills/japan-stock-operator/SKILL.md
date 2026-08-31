@@ -1,6 +1,6 @@
 ---
 name: japan-stock-operator
-description: Run and resume daily Japanese-stock operations or review individual stocks under this repository's frozen tenbagger rules. Produce auditable BUY, WATCH, WAIT, KEEP, ADD, REDUCE, SELL, or NO-ACTION decisions, durable handoff state, daily reports, and proposed order tickets. Use for scheduled daily runs, live purchase timing, pre-order checks, disclosure monitoring, weekly or monthly reviews, quarterly progress reviews, market-regime sizing, exit checks, and operation logs.
+description: Run and resume one-shot nightly Japanese-stock operations or review individual stocks under this repository's frozen tenbagger rules. Research all due items, produce auditable BUY, WATCH, WAIT, KEEP, ADD, REDUCE, SELL, or NO-ACTION decisions for the next session, create policy-compliant proposed order tickets, save durable handoff state, and wait until the next night. Use for scheduled nightly runs, live purchase timing, pre-order checks, disclosure monitoring, weekly or monthly reviews, quarterly progress reviews, market-regime sizing, exit checks, and operation logs.
 ---
 
 # Japan Stock Operator
@@ -18,11 +18,11 @@ From the repository root, read these files before judging a stock:
 
 Read [references/review-checklists.md](references/review-checklists.md) for the checklist matching the requested review mode. Treat the canonical documents as authoritative if this skill conflicts with them.
 
-For a scheduled run, “today's run,” or a request to execute all due operations, also read [references/daily-run.md](references/daily-run.md) and `docs/daily-automation-runbook-v0.1.md`.
+For a scheduled run, “today's run,” “today's nightly operation,” or a request to execute all due operations, also read [references/daily-run.md](references/daily-run.md), `docs/nightly-operation-v0.1.md`, and `docs/daily-automation-runbook-v0.1.md`.
 
 ## Choose a review mode
 
-- `daily-run`: resume durable state, execute the daily event check and all due periodic modes, save one report and handoff
+- `daily-run`: resume durable state, execute the nightly official-source check and all due periodic modes, set every target's next-day action, save proposed tickets and handoff, then wait until the next night
 - `new-entry`: full gate, score, reverse-tenbagger, liquidity, regime, and order-plan review
 - `daily-event`: check new official disclosures and immediate `S-A` triggers only
 - `weekly`: check missed disclosures, liquidity, concentration, upcoming reviews, and a provisional regime snapshot; normally return `NO-ACTION`
@@ -86,7 +86,7 @@ Generate a private draft when a concrete company is under review:
 
 Fill every applicable field. Store exact quantities, wealth, tax, and account details only under ignored `operations/private/`. Never expose account numbers, credentials, personal identifiers, or total personal assets in chat or tracked files.
 
-In `daily-run` mode, prepare or resume the date folder with `scripts/daily_operation.py`. Do not create one decision log per unchanged holding. Create detailed logs only for an actionable decision or a due periodic review, and summarize all other coverage in the daily report. Never mark a proposed order as submitted or filled without user-provided execution evidence.
+In `daily-run` mode, use `scripts/nightly_operation.py start` as the only entry point. Complete `work-plan.json`, `research-results.md`, and every target row in `next-day-actions.csv`. Use `scripts/order_ticket.py propose` for every trade action; never edit an unmatched order into existence. Finalize with the same run token, report the next-day actions, then perform no further checks until the next scheduled night. Do not create one decision log per unchanged holding. Create detailed logs only for an actionable decision or a due periodic review, and summarize all other coverage in the daily report. Never mark a proposed order as submitted or filled without user-provided execution evidence.
 
 ## Return a fixed summary
 
@@ -105,4 +105,4 @@ Then report:
 9. Primary-source links
 10. Private decision-log path, if created
 
-Do not write “buy” or “sell” without rule IDs and evidence. Do not imply certainty or guaranteed returns. Require human confirmation before any order entry.
+Do not write “buy” or “sell” without rule IDs and evidence. Do not imply certainty or guaranteed returns. Require human confirmation before any brokerage order entry. `PAPER_PROPOSED` is virtual; even an approved `LIVE` run produces only `PROPOSED` tickets for the user's next-morning pre-trade check.

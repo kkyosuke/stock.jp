@@ -594,6 +594,86 @@ def scan_sources(
         except (KeyError, SourceScanError, ValueError) as error:
             record_provider(provider, "ERROR", request_count, len(provider_rows), str(error))
 
+    calendar_status = "DISABLED"
+    if jq_config.get("market_calendar_enabled"):
+        if not jq_available:
+            record_provider(
+                "jquants_calendar",
+                "MISSING_CREDENTIAL",
+                0,
+                0,
+                "JQUANTS_API_KEY is not set",
+            )
+            calendar_status = "MISSING_CREDENTIAL"
+        else:
+            try:
+                calendar_end = cutoff_at.date() + timedelta(days=14)
+                if fixture_dir:
+                    calendar_rows, calendar_pages = _fixture_rows(
+                        fixture_dir,
+                        f"jquants-market-calendar-{cutoff_at.date().isoformat()}",
+                        "data",
+                    )
+                else:
+                    calendar_rows, calendar_pages = _jquants_pages(
+                        base_url=str(jq_config["base_url"]),
+                        path="markets/calendar",
+                        params={
+                            "from": cutoff_at.date().strftime("%Y%m%d"),
+                            "to": calendar_end.strftime("%Y%m%d"),
+                        },
+                        api_key=jq_key,
+                        timeout=timeout,
+                    )
+                _atomic_json(
+                    raw_dir
+                    / f"jquants-market-calendar-{cutoff_at.date().isoformat()}.json",
+                    {"pages": calendar_pages},
+                )
+                normalized_calendar = {
+                    "schema_version": "1.0",
+                    "from": cutoff_at.date().isoformat(),
+                    "to": calendar_end.isoformat(),
+                    "rows": [
+                        {
+                            "date": str(row.get("Date", "")),
+                            "holiday_division": str(
+                                row.get("HolDiv", row.get("HolidayDivision", ""))
+                            ),
+                        }
+                        for row in calendar_rows
+                    ],
+                }
+                _atomic_json(run_dir / "trading-calendar.json", normalized_calendar)
+                source_rows.append(
+                    _query_evidence(
+                        category="jquants_calendar",
+                        provider="jquants_calendar",
+                        scan_date=cutoff_at.date(),
+                        cutoff=cutoff_at,
+                        retrieved_at=started,
+                        count=len(calendar_rows),
+                        url=(
+                            f"{str(jq_config['base_url']).rstrip('/')}/markets/calendar"
+                            f"?from={cutoff_at.date().strftime('%Y%m%d')}"
+                            f"&to={calendar_end.strftime('%Y%m%d')}"
+                        ),
+                    )
+                )
+                record_provider(
+                    "jquants_calendar",
+                    "OK",
+                    len(calendar_pages),
+                    len(calendar_rows),
+                )
+                successful_gap_sources.add("jquants_calendar")
+                calendar_status = "OK"
+            except (KeyError, SourceScanError, ValueError) as error:
+                record_provider(
+                    "jquants_calendar", "ERROR", 0, 0, str(error)
+                )
+                calendar_status = "ERROR"
+
     td_status = health["providers"].get("jquants_tdnet", {}).get("status")
     if td_status != "OK":
         gap = _gap(
@@ -623,6 +703,15 @@ def scan_sources(
             )
             gaps.append(gap)
             health["blocking_gaps"].append(gap["gap_id"])
+    if calendar_status != "OK":
+        gap = _gap(
+            gap_id=f"{run_id}-jquants_calendar",
+            source="jquants_calendar",
+            impact="the next trading date is unconfirmed; order tickets are blocked",
+            retry_after=retry_after,
+        )
+        gaps.append(gap)
+        health["blocking_gaps"].append(gap["gap_id"])
 
     for code in sorted(targets):
         tasks.append(
