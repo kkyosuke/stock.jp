@@ -4,9 +4,11 @@ from pathlib import Path
 import shutil
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import MagicMock, patch
+from urllib.error import URLError
 
 from scripts.daily_operation import complete_run, prepare_run
-from scripts.official_source_scan import scan_sources
+from scripts.official_source_scan import SOURCE_FIELDS, _append_sources, _request_json, scan_sources
 from scripts.operation_state import PROJECT_ROOT, initialize_or_migrate_workspace
 
 
@@ -101,6 +103,75 @@ class OfficialSourceScanTest(unittest.TestCase):
         self.assertTrue(
             all(gap["severity"] == "CRITICAL" for gap in coverage["data_gaps"])
         )
+
+    def test_source_append_deduplicates_within_one_batch(self) -> None:
+        path = self.root / "sources.csv"
+        with path.open("w", encoding="utf-8", newline="") as destination:
+            csv.DictWriter(destination, fieldnames=SOURCE_FIELDS).writeheader()
+        row = dict.fromkeys(SOURCE_FIELDS, "")
+        row["source_id"] = "same-source"
+
+        added = _append_sources(path, [row, dict(row)])
+
+        with path.open(encoding="utf-8", newline="") as source:
+            rows = list(csv.DictReader(source))
+        self.assertEqual(added, 1)
+        self.assertEqual(len(rows), 1)
+
+    @patch("scripts.official_source_scan.time_module.sleep")
+    @patch("scripts.official_source_scan.urlopen")
+    def test_transient_network_error_is_retried(self, mocked_urlopen, mocked_sleep) -> None:
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = b'{"results": []}'
+        mocked_urlopen.side_effect = [URLError("temporary"), response]
+
+        payload = _request_json(
+            base_url="https://example.com",
+            path="documents.json",
+            params={},
+            headers={},
+            timeout=1,
+            backoff_seconds=0,
+        )
+
+        self.assertEqual(payload, {"results": []})
+        self.assertEqual(mocked_urlopen.call_count, 2)
+        mocked_sleep.assert_called_once()
+
+    def test_carried_critical_gap_keeps_scan_partial(self) -> None:
+        prepared = self._prepare()
+        run_dir = self.root / str(prepared["run_dir"])
+        gap = {
+            "gap_id": "carried-company-ir",
+            "status": "OPEN",
+            "severity": "CRITICAL",
+            "source": "company_ir",
+            "impact": "manual IR check remains incomplete",
+            "retry_after_jst": "2026-09-01T18:30:00+09:00",
+            "resolved_at_jst": None,
+            "resolution_evidence": None,
+        }
+        for name in ("coverage.json", "handoff.json"):
+            path = run_dir / name
+            document = json.loads(path.read_text(encoding="utf-8"))
+            document["data_gaps"] = [gap]
+            path.write_text(
+                json.dumps(document, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+        result = scan_sources(
+            run_id="2026-08-31",
+            run_token=str(prepared["run_token"]),
+            cutoff="2026-08-31T18:30:00+09:00",
+            at="2026-08-31T18:45:00+09:00",
+            fixture_dir=FIXTURES,
+            root=self.root,
+            environ={},
+        )
+
+        self.assertEqual(result["status"], "PARTIAL")
+        self.assertEqual(result["blocking_gap_count"], 1)
 
     def test_agent_can_close_fixture_run_after_manual_primary_checks(self) -> None:
         prepared = self._prepare()

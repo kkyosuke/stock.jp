@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import time as time_module
 from typing import Any, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -100,21 +101,33 @@ def _request_json(
     params: dict[str, str],
     headers: dict[str, str],
     timeout: int,
+    max_attempts: int = 3,
+    backoff_seconds: float = 0.5,
 ) -> dict[str, Any]:
     public_url = f"{base_url.rstrip('/')}/{path.lstrip('/')}"
     request = Request(
         f"{public_url}?{urlencode(params)}" if params else public_url,
         headers=headers,
     )
-    try:
-        with urlopen(request, timeout=timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except HTTPError as error:
-        raise SourceScanError(f"HTTP {error.code} from {public_url}") from error
-    except URLError as error:
-        raise SourceScanError(f"network error from {public_url}: {error.reason}") from error
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise SourceScanError(f"invalid JSON from {public_url}") from error
+    if max_attempts < 1:
+        raise ValueError("max_attempts must be >= 1")
+    for attempt in range(max_attempts):
+        try:
+            with urlopen(request, timeout=timeout) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            break
+        except HTTPError as error:
+            retryable = error.code == 429 or error.code >= 500
+            if not retryable or attempt + 1 == max_attempts:
+                raise SourceScanError(f"HTTP {error.code} from {public_url}") from error
+        except URLError as error:
+            if attempt + 1 == max_attempts:
+                raise SourceScanError(
+                    f"network error from {public_url}: {error.reason}"
+                ) from error
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise SourceScanError(f"invalid JSON from {public_url}") from error
+        time_module.sleep(backoff_seconds * (2**attempt))
     if not isinstance(payload, dict):
         raise SourceScanError(f"unexpected JSON shape from {public_url}")
     return payload
@@ -224,7 +237,14 @@ def _append_sources(path: Path, rows: list[dict[str, str]]) -> int:
     with path.open(encoding="utf-8", newline="") as source:
         existing = list(csv.DictReader(source))
     existing_ids = {row.get("source_id", "") for row in existing}
-    new_rows = [row for row in rows if row["source_id"] not in existing_ids]
+    new_rows: list[dict[str, str]] = []
+    seen_ids = set(existing_ids)
+    for row in rows:
+        source_id = row["source_id"]
+        if source_id in seen_ids:
+            continue
+        seen_ids.add(source_id)
+        new_rows.append(row)
     with path.open("a", encoding="utf-8", newline="") as destination:
         writer = csv.DictWriter(destination, fieldnames=SOURCE_FIELDS, lineterminator="\n")
         writer.writerows(new_rows)
@@ -651,10 +671,21 @@ def scan_sources(
     _resolve_gaps(handoff, sources=successful_gap_sources, resolved_at=retrieved)
     _merge_gaps(coverage, gaps)
     _merge_gaps(handoff, gaps)
+    open_blocking_gaps = sorted(
+        {
+            str(gap.get("gap_id"))
+            for gap in coverage.get("data_gaps", [])
+            if isinstance(gap, dict)
+            and gap.get("gap_id")
+            and str(gap.get("status", "OPEN")).upper() != "RESOLVED"
+            and str(gap.get("severity", "")).upper() in {"CRITICAL", "BLOCKING"}
+        }
+    )
+    health["blocking_gaps"] = open_blocking_gaps
     _atomic_json(coverage_path, coverage)
     _atomic_json(handoff_path, handoff)
     health["completed_at_jst"] = retrieved
-    health["status"] = "PARTIAL" if health["blocking_gaps"] else "COMPLETED"
+    health["status"] = "PARTIAL" if open_blocking_gaps else "COMPLETED"
     _atomic_json(health_path, health)
     secure_private_tree(root)
     return {
@@ -664,7 +695,7 @@ def scan_sources(
         "target_count": len(targets),
         "source_rows_added": added_sources,
         "research_task_count": len(_read_json(run_dir / "research-queue.json")["tasks"]),
-        "blocking_gap_count": len(health["blocking_gaps"]),
+        "blocking_gap_count": len(open_blocking_gaps),
         "provider_health": f"operations/private/runs/{run_id}/provider-health.json",
         "research_queue": f"operations/private/runs/{run_id}/research-queue.json",
     }
