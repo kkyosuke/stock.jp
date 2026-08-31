@@ -2,15 +2,6 @@
   "schema_version": "1.0",
   "request_timeout_seconds": 30,
   "initial_lookback_days": 1,
-  "jquants": {
-    "enabled": true,
-    "base_url": "https://api.jquants.com/v2",
-    "api_key_env": "JQUANTS_API_KEY",
-    "tdnet_enabled": true,
-    "financial_summary_enabled": true,
-    "daily_bars_enabled": true,
-    "market_calendar_enabled": true
-  },
   "edinet": {
     "enabled": true,
     "base_url": "https://api.edinet-fsa.go.jp/api/v2",

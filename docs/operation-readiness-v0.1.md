@@ -9,7 +9,7 @@
 .venv/bin/python scripts/operation_bootstrap.py check
 ~~~
 
-`ready: true`になるまで実運用を始めない。少なくとも状態スキーマ、運用ポリシー、EDINETとJ-Quantsの環境変数、LIVE昇格条件を確認する。APIキーはファイルやチャットへ保存せず、実行環境の`EDINET_API_KEY`と`JQUANTS_API_KEY`へ設定する。暗号化バックアップを夜間運用内で実行するには、公開受信者文字列を`OPERATION_BACKUP_AGE_RECIPIENT`へ設定する。
+`ready: true`になるまで実運用を始めない。少なくとも状態スキーマ、運用ポリシー、EDINETの環境変数、LIVE昇格条件を確認する。APIキーはファイルやチャットへ保存せず、実行環境の`EDINET_API_KEY`へ設定する。暗号化バックアップを夜間運用内で実行するには、公開受信者文字列を`OPERATION_BACKUP_AGE_RECIPIENT`へ設定する。
 
 このチェックでは外部の定時タスクが実際に起動できるかまでは判定できない。ChatGPTデスクトップ、対象ローカルプロジェクト、平日18:30のスケジュールが利用可能であることを別途確認する。
 

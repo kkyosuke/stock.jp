@@ -43,7 +43,7 @@ def check_readiness(
 
     config = _read_json(private / "source-config.json")
     credentials: dict[str, bool] = {}
-    for provider in ("edinet", "jquants"):
+    for provider in ("edinet",):
         provider_config = config.get(provider, {})
         variable = str(provider_config.get("api_key_env", ""))
         fixture_ready = fixture_dir is not None and fixture_dir.is_dir()

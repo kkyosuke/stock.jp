@@ -97,7 +97,8 @@ class OperationResilienceTest(unittest.TestCase):
             fixture_dir=self.root / "does-not-exist",
         )
         self.assertFalse(blocked["ready"])
-        self.assertTrue(any("JQUANTS_API_KEY" in item for item in blocked["blockers"]))
+        self.assertTrue(any("EDINET_API_KEY" in item for item in blocked["blockers"]))
+        self.assertEqual(set(blocked["credentials"]), {"edinet"})
         self.assertTrue(ready["ready"])
         self.assertFalse(nonexistent_fixture["ready"])
         self.assertEqual(ready["broker_submission"], "HUMAN_ONLY")

@@ -94,6 +94,24 @@ class OperationPolicyTest(unittest.TestCase):
             "live_gate_evidence.point_in_time_full_universe_validation", failures
         )
 
+    def test_historical_replay_replaces_twelve_month_paper_gate(self) -> None:
+        gates = self.policy["live_gates"]
+
+        self.assertIn("historical_replay_2025_2026_accepted", gates)
+        self.assertNotIn("minimum_12_month_paper_trade", gates)
+
+        legacy = copy.deepcopy(self.policy)
+        legacy["live_gates"]["minimum_12_month_paper_trade"] = legacy[
+            "live_gates"
+        ].pop("historical_replay_2025_2026_accepted")
+        legacy["live_gate_evidence"]["minimum_12_month_paper_trade"] = legacy[
+            "live_gate_evidence"
+        ].pop("historical_replay_2025_2026_accepted")
+        self.assertIn(
+            "missing live gates: historical_replay_2025_2026_accepted",
+            validate_policy(legacy),
+        )
+
     def test_init_copies_policy_without_overwriting(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
