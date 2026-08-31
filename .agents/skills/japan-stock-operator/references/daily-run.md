@@ -6,11 +6,13 @@ Use this workflow when the request is “today's run,” a scheduled operation, 
 
 1. Read `docs/daily-automation-runbook-v0.1.md`, `operations/private/operation-policy.json`, and the canonical rule files named in `SKILL.md`.
 2. Run `scripts/daily_operation.py prepare --at <current aware JST timestamp>` and retain the returned `run_token`. If it returns `locked`, do not start a second run.
-3. Run `scripts/operation_state.py validate`, then read the returned run paths including `coverage.json`, `operations/private/state.json`, the previous run's `handoff.json` when present, `portfolio-register.csv`, `watchlist.csv`, and the trade, recovered-capital, cash, corporate-action, rebuy-restriction, and industry-exposure ledgers.
+3. Run `scripts/operation_state.py validate`, then run `scripts/official_source_scan.py` with the same token and declared cutoff. Read `provider-health.json`, `research-queue.json`, `coverage.json`, `operations/private/state.json`, the previous run's `handoff.json` when present, `portfolio-register.csv`, `watchlist.csv`, and the trade, recovered-capital, cash, corporate-action, rebuy-restriction, and industry-exposure ledgers.
 4. If the returned run status is already `completed`, report that the date was already closed. Do not create duplicate orders.
 5. If it is `in_progress`, resume the existing files rather than replacing them.
 
 ## Cover the required universe
+
+Process every task in `research-queue.json`. Check company IR and JPX notices in their primary sites even when the machine APIs succeed. Mark a task `COMPLETED` only with `evidence_source_ids`; defer it only by copying the same task ID into `handoff.pending_reviews`.
 
 Check all current holdings and pending orders. Check active watchlist names for new official disclosures, but do not fully rescore every watchlist name every day. Use the prior successful disclosure cutoff as the lower bound and the declared current cutoff as the upper bound.
 

@@ -1,0 +1,10 @@
+{
+  "schema_version": "1.0",
+  "run_id": "{{RUN_ID}}",
+  "status": "NOT_RUN",
+  "started_at_jst": null,
+  "completed_at_jst": null,
+  "providers": {},
+  "blocking_gaps": [],
+  "notes": []
+}
