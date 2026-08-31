@@ -12,8 +12,8 @@
 
 ## 1. 1回の処理
 
-1. `nightly_operation.py start`で状態検証、同時実行ロック、当日フォルダ作成、公式API取得、市場カレンダー確認、期限到来タスク作成を一括実行する。
-2. `research-queue.json`と`work-plan.json`を一次資料で処理する。完了できない項目は理由と期限を付けて`DEFERRED`にし、同じIDを`handoff.pending_reviews`へ残す。
+1. `nightly_operation.py start`で状態検証、同時実行ロック、当日フォルダ作成、EDINET取得、一次サイト確認タスク、期限到来タスクを一括作成する。
+2. `research-queue.json`と`work-plan.json`を一次資料で処理し、TDnet、公式価格・コーポレートアクション、JPX現物株カレンダーを確認する。完了できない項目は理由と期限を付けて`DEFERRED`にし、同じIDを`handoff.pending_reviews`へ残す。
 3. 保有銘柄と監視銘柄を漏れなく`next-day-actions.csv`へ記録する。対象が0件でも`GLOBAL / NO-ACTION`を1行残す。
 4. `BUY / ADD / REDUCE / SELL`なら、ルールID、一次資料ID、個別判断ログを揃えた後で`order_ticket.py propose`を使う。注文票とアクション、未照合注文、取引イベント台帳は同時に更新される。
 5. `research-results.md`と`report.md`を完成させ、カバレッジを閉じる。
@@ -53,7 +53,7 @@
 注文票は次のすべてを満たす場合だけ作成できる。
 
 - 運用ポリシーが有効で、`PAPER`または全昇格条件を満たす`LIVE`
-- J-Quants市場カレンダーで翌取引日が確定
+- JPXの現物株取引日カレンダーを一次資料で確認し、翌取引日が確定
 - 重大なデータ欠損がない
 - 調査キューが全件`COMPLETED`。`DEFERRED`を1件でも含む場合、その夜の売買アクションは`WAIT`へ変更する
 - 対応する翌日アクションにルールIDと一次資料IDがある
@@ -99,10 +99,10 @@ $japan-stock-operator を使って、今日の夜間運用を最後まで実行�
 
 ## 7. 公式情報源
 
-- [J-Quants API V2](https://www.jpx.co.jp/corporate/news/news-releases/6020/20260119.html)
-- [J-Quants公式Pythonクライアント](https://github.com/J-Quants/jquants-api-client-python)
 - [EDINET APIキー案内](https://disclosure2.edinet-fsa.go.jp/week0020.aspx)
 - [TDnet API](https://www.jpx.co.jp/markets/paid-info-listing/tdnet/02.html)
+- [JPX 休業日一覧](https://www.jpx.co.jp/corporate/about-jpx/calendar/)
+- [JPX その他統計資料](https://www.jpx.co.jp/markets/statistics-equities/misc/)
 
 APIの成功は企業IRとJPX個別確認の代替ではない。売買判断に使う事実は一次資料へ結び付ける。
 

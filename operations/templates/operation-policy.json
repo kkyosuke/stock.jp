@@ -9,7 +9,7 @@
   "effective_at_jst": "2026-08-31T00:00:00+09:00",
   "live_gates": {
     "point_in_time_full_universe_validation": false,
-    "minimum_12_month_paper_trade": false,
+    "historical_replay_2025_2026_accepted": false,
     "twenty_day_shadow_run": false,
     "official_source_coverage": false,
     "backup_restore_drill": false,
@@ -17,7 +17,7 @@
   },
   "live_gate_evidence": {
     "point_in_time_full_universe_validation": null,
-    "minimum_12_month_paper_trade": null,
+    "historical_replay_2025_2026_accepted": null,
     "twenty_day_shadow_run": null,
     "official_source_coverage": null,
     "backup_restore_drill": null,

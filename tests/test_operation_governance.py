@@ -22,12 +22,13 @@ class OperationGovernanceTest(unittest.TestCase):
     def test_go_live_and_rule_review_are_explicit(self) -> None:
         for phrase in (
             "現在の運用モード: `PAPER`",
-            "最低12か月のペーパートレード",
+            "2025年通年と2026年1月1日から8月31日まで",
+            "historical-replay-2025-2026.md",
             "20営業日連続",
             "発注権限は `HUMAN_ONLY`",
             "月次",
             "四半期",
-            "年次または12か月終了時",
+            "暦年終了時",
             "同じ未見期間を見て閾値を再調整しない",
         ):
             self.assertIn(phrase, self.text)

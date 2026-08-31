@@ -56,6 +56,84 @@ class NightlyOperationTest(unittest.TestCase):
             json.dumps(queue, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
 
+    def _complete_primary_checks(self, run_dir: Path) -> None:
+        with (run_dir / "sources.csv").open(
+            "a", encoding="utf-8", newline=""
+        ) as destination:
+            writer = csv.writer(destination)
+            common = [
+                "2026-08-31T18:20:00+09:00",
+                "2026-08-31T18:50:00+09:00",
+            ]
+            writer.writerow(
+                [
+                    "manual-tdnet",
+                    "tdnet",
+                    "",
+                    "TDnet checked through cutoff",
+                    *common,
+                    "https://www.release.tdnet.info/inbs/I_main_00.html",
+                    "true",
+                    "true",
+                    "manual check",
+                ]
+            )
+            writer.writerow(
+                [
+                    "manual-jpx",
+                    "jpx",
+                    "",
+                    "JPX notices, prices and calendar checked",
+                    *common,
+                    "https://www.jpx.co.jp/",
+                    "true",
+                    "true",
+                    "manual check",
+                ]
+            )
+        (run_dir / "trading-calendar.json").write_text(
+            json.dumps(
+                {"rows": [{"date": "2026-09-01", "holiday_division": "1"}]},
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        for name in ("coverage.json", "handoff.json"):
+            path = run_dir / name
+            document = json.loads(path.read_text(encoding="utf-8"))
+            for gap in document["data_gaps"]:
+                gap["status"] = "RESOLVED"
+                gap["resolved_at_jst"] = "2026-08-31T18:50:00+09:00"
+                gap["resolution_evidence"] = "manual-jpx"
+            if name == "coverage.json":
+                document["official_sources"]["tdnet"]["status"] = "CHECKED"
+                document["official_sources"]["jpx"]["status"] = "CHECKED"
+            path.write_text(
+                json.dumps(document, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        plan_path = run_dir / "work-plan.json"
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        plan["trading_calendar_confirmed"] = True
+        plan["next_trading_date"] = "2026-09-01"
+        plan_path.write_text(
+            json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        actions_path = run_dir / "next-day-actions.csv"
+        with actions_path.open(encoding="utf-8", newline="") as source:
+            reader = csv.DictReader(source)
+            fields = list(reader.fieldnames or [])
+            actions = list(reader)
+        for action in actions:
+            action["trade_date"] = "2026-09-01"
+        with actions_path.open("w", encoding="utf-8", newline="") as destination:
+            writer = csv.DictWriter(destination, fieldnames=fields, lineterminator="\n")
+            writer.writeheader()
+            writer.writerows(actions)
+        self._complete_research_queue(run_dir)
+
     def test_start_confirms_next_trade_date_and_builds_due_work(self) -> None:
         self._add_holding()
         result = self._start()
@@ -66,12 +144,12 @@ class NightlyOperationTest(unittest.TestCase):
         ) as source:
             actions = list(csv.DictReader(source))
 
-        self.assertEqual(result["source_scan_status"], "COMPLETED")
-        self.assertTrue(result["trading_calendar_confirmed"])
-        self.assertEqual(result["next_trading_date"], "2026-09-01")
+        self.assertEqual(result["source_scan_status"], "PARTIAL")
+        self.assertFalse(result["trading_calendar_confirmed"])
+        self.assertIsNone(result["next_trading_date"])
         self.assertIn("2026-08-31-daily-event", result["due_task_ids"])
         self.assertEqual(actions[0]["code"], "1234")
-        self.assertEqual(actions[0]["trade_date"], "2026-09-01")
+        self.assertEqual(actions[0]["trade_date"], "")
         self.assertEqual(plan["status"], "IN_PROGRESS")
 
     def test_cash_equity_calendar_skips_holiday_trading_division(self) -> None:
@@ -100,7 +178,7 @@ class NightlyOperationTest(unittest.TestCase):
         self._add_holding()
         started = self._start()
         run_dir = self.root / str(started["run_dir"])
-        self._complete_research_queue(run_dir)
+        self._complete_primary_checks(run_dir)
         actions_path = run_dir / "next-day-actions.csv"
         with actions_path.open(encoding="utf-8", newline="") as source:
             reader = csv.DictReader(source)
@@ -111,7 +189,7 @@ class NightlyOperationTest(unittest.TestCase):
                 "next_action": "BUY",
                 "rule_ids": "E-1;E-2",
                 "trigger_condition": "全エントリー条件を充足",
-                "evidence_source_ids": "tdnet-20260831000001",
+                "evidence_source_ids": "manual-tdnet",
             }
         )
         with actions_path.open("w", encoding="utf-8", newline="") as destination:
@@ -163,6 +241,7 @@ class NightlyOperationTest(unittest.TestCase):
         started = self._start()
         run_dir = self.root / str(started["run_dir"])
         queue_path = run_dir / "research-queue.json"
+        self._complete_primary_checks(run_dir)
         queue = json.loads(queue_path.read_text(encoding="utf-8"))
         queue["tasks"][0]["status"] = "DEFERRED"
         queue_path.write_text(json.dumps(queue), encoding="utf-8")
@@ -214,7 +293,7 @@ class NightlyOperationTest(unittest.TestCase):
         self._add_holding()
         started = self._start()
         run_dir = self.root / str(started["run_dir"])
-        self._complete_research_queue(run_dir)
+        self._complete_primary_checks(run_dir)
         policy_path = self.root / "operations/private/operation-policy.json"
         policy = json.loads(policy_path.read_text(encoding="utf-8"))
         policy["operation_mode"] = "PAUSED"
@@ -336,15 +415,7 @@ class NightlyOperationTest(unittest.TestCase):
     def test_empty_universe_can_finalize_and_wait_until_next_night(self) -> None:
         started = self._start()
         run_dir = self.root / str(started["run_dir"])
-        with (run_dir / "sources.csv").open("a", encoding="utf-8", newline="") as destination:
-            csv.writer(destination).writerow(
-                [
-                    "manual-jpx", "jpx", "", "JPX notices checked",
-                    "2026-08-31T18:20:00+09:00", "2026-08-31T18:50:00+09:00",
-                    "https://www.jpx.co.jp/", "true", "true", "manual check",
-                ]
-            )
-        self._complete_research_queue(run_dir)
+        self._complete_primary_checks(run_dir)
         coverage_path = run_dir / "coverage.json"
         coverage = json.loads(coverage_path.read_text(encoding="utf-8"))
         coverage["status"] = "COMPLETED"
