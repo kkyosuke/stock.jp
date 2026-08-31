@@ -41,7 +41,8 @@ class DailyAutomationRunbookTest(unittest.TestCase):
 
     def test_failed_run_does_not_advance_cutoff(self) -> None:
         self.assertIn("`last_disclosure_cutoff_jst` を進めない", self.text)
-        self.assertIn("同日の未完了実行があれば再開", self.text)
+        self.assertIn("返された`run_token`を保持", self.text)
+        self.assertIn("実行が`locked`なら別実行を開始しない", self.text)
 
     def test_all_tracked_templates_exist(self) -> None:
         for filename in (
@@ -50,6 +51,8 @@ class DailyAutomationRunbookTest(unittest.TestCase):
             "order-ticket-template.csv",
             "pretrade-check-template.md",
             "run-history-template.csv",
+            "run-coverage-template.json",
+            "source-watermarks.json",
             "watchlist.csv",
         ):
             self.assertTrue((ROOT / "operations/templates" / filename).is_file())

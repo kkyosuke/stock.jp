@@ -33,6 +33,7 @@ TEMPLATE_TO_PRIVATE = {
     "rebuy-restrictions.csv": "rebuy-restrictions.csv",
     "industry-exposure.csv": "industry-exposure.csv",
     "schema-migration-log.csv": "schema-migration-log.csv",
+    "source-watermarks.json": "source-watermarks.json",
 }
 
 CSV_MIGRATIONS = {
