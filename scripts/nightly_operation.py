@@ -113,21 +113,28 @@ def finalize_nightly_run(
     run_dir = root / "operations/private/runs" / run_id
     handoff_path = run_dir / "handoff.json"
     handoff = _read_json(handoff_path)
-    handoff["next_run_at_jst"] = _next_weeknight(_parse_jst(completed_at))
+    previous_next_run = handoff.get("next_run_at_jst")
+    next_run_at = _next_weeknight(_parse_jst(completed_at))
+    handoff["next_run_at_jst"] = next_run_at
     _atomic_json(handoff_path, handoff)
-    result = complete_run(
-        run_id=run_id,
-        run_token=run_token,
-        completed_at=completed_at,
-        source_cutoff=source_cutoff,
-        price_date=price_date,
-        summary=summary,
-        alert_count=alert_count,
-        root=root,
-    )
+    try:
+        result = complete_run(
+            run_id=run_id,
+            run_token=run_token,
+            completed_at=completed_at,
+            source_cutoff=source_cutoff,
+            price_date=price_date,
+            summary=summary,
+            alert_count=alert_count,
+            root=root,
+        )
+    except Exception:
+        handoff["next_run_at_jst"] = previous_next_run
+        _atomic_json(handoff_path, handoff)
+        raise
     return {
         **result,
-        "next_run_at_jst": handoff["next_run_at_jst"],
+        "next_run_at_jst": next_run_at,
         "wait_instruction": "次回夜間実行まで待機。LIVE注文候補だけ翌朝に人間が確認する。",
     }
 

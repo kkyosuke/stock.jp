@@ -36,7 +36,7 @@ Update the current run's:
 - `report.md` with coverage, exceptions, decisions, due reviews, data gaps, human actions, and the next run
 - `sources.csv` with publication time, retrieval time, URL, and whether it is a primary source
 - `coverage.json` by moving every actually checked expected item to `checked` and marking evidenced official sources `CHECKED`
-- `orders.csv` only through `scripts/order_ticket.py propose` for actionable next-session proposals; use the policy-derived status (`PAPER_PROPOSED` in `PAPER`, `PROPOSED` only in an approved `LIVE` mode)
+- `orders.csv` only through `scripts/order_ticket.py propose` after every research task is `COMPLETED`; if any research task is `DEFERRED`, change the affected trade action to `WAIT`. Use the policy-derived status (`PAPER_PROPOSED` in `PAPER`, `PROPOSED` only in an approved `LIVE` mode)
 - `pretrade-check.md` with the target trade date when an order is proposed
 - individual decision logs only for an actionable decision or a due periodic review
 - `handoff.json` with `pending_reviews`, `pending_orders`, `data_gaps`, and `next_run_at_jst`

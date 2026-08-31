@@ -1,11 +1,12 @@
 import csv
+from datetime import date
 import json
 from pathlib import Path
 import shutil
 from tempfile import TemporaryDirectory
 import unittest
 
-from scripts.nightly_artifacts import validate_nightly_artifacts
+from scripts.nightly_artifacts import next_trading_date, validate_nightly_artifacts
 from scripts.nightly_operation import finalize_nightly_run, start_nightly_run
 from scripts.operation_state import PROJECT_ROOT, initialize_or_migrate_workspace
 from scripts.order_ticket import propose_order
@@ -72,6 +73,28 @@ class NightlyOperationTest(unittest.TestCase):
         self.assertEqual(actions[0]["trade_date"], "2026-09-01")
         self.assertEqual(plan["status"], "IN_PROGRESS")
 
+    def test_cash_equity_calendar_skips_holiday_trading_division(self) -> None:
+        run_dir = self.root / "calendar"
+        run_dir.mkdir()
+        (run_dir / "trading-calendar.json").write_text(
+            json.dumps(
+                {
+                    "rows": [
+                        {"date": "2026-09-01", "holiday_division": "3"},
+                        {"date": "2026-09-02", "holiday_division": "1"},
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        next_date, confirmed = next_trading_date(
+            run_dir, date.fromisoformat("2026-08-31")
+        )
+
+        self.assertTrue(confirmed)
+        self.assertEqual(next_date, "2026-09-02")
+
     def test_paper_proposal_updates_action_handoff_and_trade_ledger_once(self) -> None:
         self._add_holding()
         started = self._start()
@@ -114,6 +137,8 @@ class NightlyOperationTest(unittest.TestCase):
             "at": "2026-08-31T19:00:00+09:00",
             "root": self.root,
         }
+        decision_path = self.root / args["decision_id"]
+        decision_path.write_text("# decision\n", encoding="utf-8")
         first = propose_order(**args)
         second = propose_order(**args)
 
@@ -131,6 +156,58 @@ class NightlyOperationTest(unittest.TestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["event_type"], "PAPER_PROPOSED")
         self.assertIn(first["ticket_id"], handoff["pending_orders"])
+
+    def test_deferred_research_cannot_support_an_order(self) -> None:
+        self._add_holding()
+        started = self._start()
+        run_dir = self.root / str(started["run_dir"])
+        queue_path = run_dir / "research-queue.json"
+        queue = json.loads(queue_path.read_text(encoding="utf-8"))
+        queue["tasks"][0]["status"] = "DEFERRED"
+        queue_path.write_text(json.dumps(queue), encoding="utf-8")
+        handoff_path = run_dir / "handoff.json"
+        handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
+        handoff["pending_reviews"] = [queue["tasks"][0]["task_id"]]
+        handoff_path.write_text(json.dumps(handoff), encoding="utf-8")
+        actions_path = run_dir / "next-day-actions.csv"
+        with actions_path.open(encoding="utf-8", newline="") as source:
+            reader = csv.DictReader(source)
+            fields = list(reader.fieldnames or [])
+            actions = list(reader)
+        actions[0].update(
+            {
+                "next_action": "BUY",
+                "rule_ids": "E-1",
+                "evidence_source_ids": "tdnet-20260831000001",
+            }
+        )
+        with actions_path.open("w", encoding="utf-8", newline="") as destination:
+            writer = csv.DictWriter(destination, fieldnames=fields)
+            writer.writeheader()
+            writer.writerows(actions)
+        decision_path = self.root / "operations/private/decisions/deferred.md"
+        decision_path.write_text("# decision\n", encoding="utf-8")
+
+        with self.assertRaisesRegex(ValueError, "must be completed"):
+            propose_order(
+                run_id="2026-08-31",
+                run_token=str(started["run_token"]),
+                action_id="2026-08-31-1234-next",
+                code="1234",
+                company="Example",
+                side="BUY",
+                action="BUY",
+                rule_ids="E-1",
+                trade_date="2026-09-01",
+                limit_price="1000",
+                quantity="100",
+                position_pct="1",
+                valid_until="2026-09-01T15:30:00+09:00",
+                participation_cap_pct="5",
+                decision_id="operations/private/decisions/deferred.md",
+                at="2026-08-31T19:00:00+09:00",
+                root=self.root,
+            )
 
     def test_paused_policy_blocks_order_ticket(self) -> None:
         self._add_holding()
@@ -209,6 +286,27 @@ class NightlyOperationTest(unittest.TestCase):
         )
         self.assertTrue(any("requires a matching order ticket" in error for error in errors))
 
+    def test_honest_uncertainty_text_is_not_treated_as_a_template_marker(self) -> None:
+        started = self._start()
+        run_dir = self.root / str(started["run_dir"])
+        (run_dir / "research-results.md").write_text(
+            "# 夜間調査結果\n\n- 状態: `COMPLETED`\n"
+            "- 情報カットオフ（JST）: 2026-08-31T18:30:00+09:00\n"
+            "- 翌営業日: 2026-09-01\n- 対象件数: 0\n"
+            "- 未解決事項: なし\n\n将来の影響は未確定であり、追加確認する。\n",
+            encoding="utf-8",
+        )
+
+        errors = validate_nightly_artifacts(
+            root=self.root,
+            run_id="2026-08-31",
+            handoff=json.loads((run_dir / "handoff.json").read_text(encoding="utf-8")),
+            coverage=json.loads((run_dir / "coverage.json").read_text(encoding="utf-8")),
+            orders=[],
+        )
+
+        self.assertFalse(any("unresolved marker: 未確定" in error for error in errors))
+
     def test_empty_universe_can_finalize_and_wait_until_next_night(self) -> None:
         started = self._start()
         run_dir = self.root / str(started["run_dir"])
@@ -271,6 +369,26 @@ class NightlyOperationTest(unittest.TestCase):
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["next_run_at_jst"], "2026-09-01T18:30:00+09:00")
         self.assertIn("次回夜間実行まで待機", result["wait_instruction"])
+
+    def test_failed_finalize_restores_next_run_handoff(self) -> None:
+        started = self._start()
+        run_dir = self.root / str(started["run_dir"])
+        handoff_path = run_dir / "handoff.json"
+        before = json.loads(handoff_path.read_text(encoding="utf-8"))
+
+        with self.assertRaises(ValueError):
+            finalize_nightly_run(
+                run_id="2026-08-31",
+                run_token=str(started["run_token"]),
+                completed_at="2026-08-31T19:05:00+09:00",
+                source_cutoff="2026-08-31T18:30:00+09:00",
+                price_date="2026-08-31",
+                summary="must fail",
+                root=self.root,
+            )
+
+        after = json.loads(handoff_path.read_text(encoding="utf-8"))
+        self.assertEqual(after.get("next_run_at_jst"), before.get("next_run_at_jst"))
 
 
 if __name__ == "__main__":

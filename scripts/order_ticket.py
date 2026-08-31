@@ -7,6 +7,7 @@ import csv
 from datetime import date, datetime
 import hashlib
 import json
+import math
 from pathlib import Path
 import tempfile
 from typing import Any
@@ -80,7 +81,7 @@ def _positive(value: str | float | int, name: str) -> str:
         parsed = float(value)
     except (TypeError, ValueError) as error:
         raise ValueError(f"{name} must be numeric") from error
-    if parsed <= 0:
+    if not math.isfinite(parsed) or parsed <= 0:
         raise ValueError(f"{name} must be > 0")
     return str(value)
 
@@ -125,6 +126,8 @@ def propose_order(
     expires = _parse_jst(valid_until)
     if expires <= prepared:
         raise ValueError("valid_until must be after prepared time")
+    if expires.date() != parsed_trade:
+        raise ValueError("valid_until must be on trade_date")
     normalized_action = action.strip().upper()
     normalized_side = side.strip().upper()
     if normalized_action not in TRADE_ACTIONS:
@@ -138,6 +141,12 @@ def propose_order(
     quantity_text = _positive(quantity, "quantity")
     position_text = _positive(position_pct, "position_pct")
     participation_text = _positive(participation_cap_pct, "participation_cap_pct")
+    if not float(quantity_text).is_integer():
+        raise ValueError("quantity must be a whole number of shares")
+    if float(position_text) > 100:
+        raise ValueError("position_pct must be <= 100")
+    if float(participation_text) > 10:
+        raise ValueError("participation_cap_pct must be <= 10")
 
     private = root / "operations/private"
     run_dir = private / "runs" / run_id
@@ -154,6 +163,15 @@ def propose_order(
         detail = ", ".join(status["live_gate_failures"]) or str(status["operation_mode"])
         raise PermissionError(f"operation policy blocks order tickets: {detail}")
 
+    decision_path = root / decision_id.strip()
+    decisions_root = (private / "decisions").resolve()
+    try:
+        decision_path.resolve().relative_to(decisions_root)
+    except ValueError as error:
+        raise ValueError("decision_id must be a path under operations/private/decisions") from error
+    if not decision_path.is_file():
+        raise ValueError("decision log must exist before proposing an order")
+
     coverage = _read_json(run_dir / "coverage.json")
     blocking_gaps = [
         gap for gap in coverage.get("data_gaps", [])
@@ -163,15 +181,26 @@ def propose_order(
     ]
     if blocking_gaps:
         raise ValueError("blocking source gaps must be resolved before proposing an order")
+    handoff_path = run_dir / "handoff.json"
+    handoff = _read_json(handoff_path)
+    blocking_handoff_gaps = [
+        gap
+        for gap in handoff.get("data_gaps", [])
+        if isinstance(gap, dict)
+        and str(gap.get("status", "OPEN")).upper() != "RESOLVED"
+        and str(gap.get("severity", "")).upper() in {"CRITICAL", "BLOCKING"}
+    ]
+    if blocking_handoff_gaps:
+        raise ValueError("blocking handoff gaps must be resolved before proposing an order")
     queue = _read_json(run_dir / "research-queue.json")
     unfinished = [
         str(task.get("task_id", "<blank>"))
         for task in queue.get("tasks", [])
         if isinstance(task, dict)
-        and str(task.get("status", "")).upper() not in {"COMPLETED", "DEFERRED"}
+        and str(task.get("status", "")).upper() != "COMPLETED"
     ]
     if unfinished:
-        raise ValueError("research tasks must be terminal before proposing an order: " + ", ".join(unfinished))
+        raise ValueError("research tasks must be completed before proposing an order: " + ", ".join(unfinished))
 
     plan = _read_json(run_dir / "work-plan.json")
     if not plan.get("trading_calendar_confirmed"):
@@ -190,12 +219,17 @@ def propose_order(
         raise ValueError("order does not match the selected next-day action")
     if selected.get("trade_date", "").strip() != trade_date:
         raise ValueError("action trade_date does not match")
+    if selected.get("rule_ids", "").strip() != rule_ids.strip():
+        raise ValueError("order rule_ids do not match the selected action")
     if not selected.get("evidence_source_ids", "").strip():
         raise ValueError("trade action requires primary-source evidence")
     _, source_rows = _read_csv(run_dir / "sources.csv")
     valid_source_ids = {
-        row.get("source_id", "").strip() for row in source_rows
+        row.get("source_id", "").strip()
+        for row in source_rows
         if row.get("source_id", "").strip()
+        and row.get("primary_source", "").strip().lower() in {"true", "1"}
+        and row.get("used_for_decision", "").strip().lower() in {"true", "1"}
     }
     cited_source_ids = {
         value.strip()
@@ -272,8 +306,6 @@ def propose_order(
     selected["decision_log_path"] = decision_id.strip()
     _atomic_csv(actions_path, ACTION_FIELDS, actions)
 
-    handoff_path = run_dir / "handoff.json"
-    handoff = _read_json(handoff_path)
     pending = handoff.setdefault("pending_orders", [])
     if ticket_id not in pending:
         pending.append(ticket_id)

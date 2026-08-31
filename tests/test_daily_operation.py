@@ -213,6 +213,7 @@ def append_paper_order(
             "ticket_id": ticket_id,
             "human_action": "PAPER reconciliation",
             "evidence_source_ids": "jpx-check-1",
+            "decision_log_path": f"2026-08-31-{code}-monthly",
         }
     )
     actions.append(action_row)

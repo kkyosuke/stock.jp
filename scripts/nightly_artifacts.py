@@ -119,7 +119,7 @@ def next_trading_date(run_dir: Path, after_date: date) -> tuple[str | None, bool
         except ValueError:
             continue
         division = str(row.get("holiday_division", "0")).strip()
-        if candidate > after_date and division not in {"", "0"}:
+        if candidate > after_date and division in {"1", "2"}:
             trading_dates.append(candidate.isoformat())
     return (min(trading_dates), True) if trading_dates else (None, False)
 
@@ -397,9 +397,19 @@ def validate_nightly_artifacts(
         str(value.get("review_id") if isinstance(value, dict) else value)
         for value in handoff.get("pending_reviews", [])
     }
+    task_ids: list[str] = []
     for task in plan.get("tasks", []):
         task_id = str(task.get("task_id", "")).strip()
+        task_ids.append(task_id)
         status = str(task.get("status", "")).upper()
+        if not task_id:
+            errors.append("work-plan task requires task_id")
+        try:
+            _parse_jst(str(task.get("due_at_jst", "")))
+        except (TypeError, ValueError):
+            errors.append(
+                f"work-plan task {task_id or '<blank>'} has invalid due_at_jst"
+            )
         if status not in TERMINAL_TASK_STATUSES:
             errors.append(f"work-plan task is not terminal: {task_id or '<blank>'}")
         if status == "COMPLETED" and not task.get("evidence_source_ids"):
@@ -412,11 +422,23 @@ def validate_nightly_artifacts(
                 )
         if status == "DEFERRED" and task_id not in pending_reviews:
             errors.append(f"deferred work-plan task missing from handoff: {task_id or '<blank>'}")
+    duplicate_tasks = sorted(
+        {value for value in task_ids if value and task_ids.count(value) > 1}
+    )
+    if duplicate_tasks:
+        errors.append(f"duplicate work-plan task_id: {', '.join(duplicate_tasks)}")
 
     research = (run_dir / "research-results.md").read_text(encoding="utf-8")
     if "- 状態: `COMPLETED`" not in research:
         errors.append("research results status must be COMPLETED")
-    for marker in ("{{RUN_ID}}", "未確定", "一次資料の確認結果を、事実・計算・判断に分けて記録する。"):
+    for marker in (
+        "{{RUN_ID}}",
+        "- 情報カットオフ（JST）: 未確定",
+        "- 翌営業日: 未確定",
+        "- 対象件数: 未確定",
+        "- 未解決事項: 未確定",
+        "一次資料の確認結果を、事実・計算・判断に分けて記録する。",
+    ):
         if marker in research:
             errors.append(f"research results contains unresolved marker: {marker}")
 
@@ -462,7 +484,23 @@ def validate_nightly_artifacts(
                 errors.append(f"trade action {action_id} requires a matching order ticket")
             else:
                 order = order_by_ticket[ticket_id]
-                if order.get("code", "").strip() != code or order.get("action", "").strip().upper() != action:
+                expected_side = "BUY" if action in {"BUY", "ADD"} else "SELL"
+                matching_fields = (
+                    order.get("code", "").strip() == code,
+                    order.get("action", "").strip().upper() == action,
+                    order.get("side", "").strip().upper() == expected_side,
+                    order.get("trade_date", "").strip()
+                    == row.get("trade_date", "").strip(),
+                    order.get("rule_ids", "").strip()
+                    == row.get("rule_ids", "").strip(),
+                    order.get("limit_price", "").strip()
+                    == row.get("limit_price", "").strip(),
+                    order.get("position_pct", "").strip()
+                    == row.get("position_pct", "").strip(),
+                    order.get("decision_id", "").strip()
+                    == row.get("decision_log_path", "").strip(),
+                )
+                if not all(matching_fields):
                     errors.append(f"trade action {action_id} does not match order {ticket_id}")
                 action_by_ticket[ticket_id] = row
     duplicates = sorted({value for value in ids if value and ids.count(value) > 1})
