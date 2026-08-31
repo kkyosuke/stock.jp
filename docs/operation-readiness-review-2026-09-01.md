@@ -1,100 +1,88 @@
-# 実運用開始 readiness review（2026-09-01、修正後）
+# 実運用開始 readiness review（2026-09-01、最新main統合後）
 
 ## 結論
 
-- 実資金`LIVE`: **NO-GO**。12か月PAPER、point-in-time全母集団、実データ20営業日、公式情報源、個人条件、明示承認が未完了である。
-- 継続`PAPER`: **コードは開始可能な状態へ修正済み、現在のprivate設定はNO-GO**。`operation_bootstrap.py check`の`paper_blockers`を0件にすれば開始できる。
-- 証券会社への通信: 常に`HUMAN_ONLY`。PAPER注文は`PAPER_PROPOSED`で、実注文しない。
+- 実資金`LIVE`: **NO-GO**。コードだけでは完了しないLIVEゲートを残し、証拠が揃うまで機械的に停止する。
+- 継続`PAPER`: **仕組みは実装済み、利用者のprivate設定はNO-GO**。active監視銘柄または保有が0件で、31日以内の検証済みバックアップも記録されていない。
+- 証券会社への通信: 常に`HUMAN_ONLY`。PAPER注文票は`PAPER_PROPOSED`であり、実注文しない。
 
-現時点のprivate状態では、保有・関心中0件と検証済みバックアップ不足がPAPER blockerである。月次全市場scanは成功済みなので、AIがscreenから一次資料確認対象を選び、`watchlist.csv`へ昇格させた後に日次snapshotとバックアップを作ればよい。
+`operation_bootstrap.py check`が`paper_go: true`を返すまで夜間runは開始できない。`nightly_operation.py start`も同じreadinessを再検証するため、手順の飛ばし越しでは開始できない。
 
 ## 目標との適合
 
-| 目標 | 修正後 | 内容 |
+| 目標 | 状態 | 実装 |
 |---|---|---|
-| 毎日の株価を自動収集 | **PASS（実装・実API）** | 非AI collectorを分離。保有＋関心中を平日18:00に100%取得するlaunchd定義を生成できる。 |
-| 全体監視 | **PASS（実API）** | 月次だけJPX内国株式全体を取得し、機械可読screenを作る。 |
-| 人がAIへ一回指示 | **PASS** | 保存済みsnapshotを確認後、夜間処理、明日のアクション、今日のログを一巡する。 |
-| 明日の動きと今日のログ | **PASS** | `next-day-actions.csv`、`report.md`、`research-results.md`、`handoff.json`を必須検証する。 |
-| ニュース・世界情勢 | **PASS（必須タスク化）** | `global-risk.md`へ為替・金利・資源・政策・地政学を事実→KPI伝播→判断で保存する。未完成ならfinalizeできない。 |
-| 長期・非デイトレ | **PASS（現行戦略範囲）** | 日次は例外、全体抽出と価格判断は月次、企業進捗は四半期。v0.2の3年期限は維持する。 |
-| ピンポイント注文不可 | **PAPERは問題なし／LIVEはNO-GO** | 現行v0.2は翌営業日寄り前確認を要求する。成行へ勝手に変更せず、別執行版の検証まではLIVEにしない。 |
+| 毎日の株価を自動収集 | **PASS** | GitHub Actionsが平日18:30 JSTにJPX現行内国株式全体をYahoo Financeから取得し、データPRを作る。 |
+| 関心中は毎日、全体は月次見直し | **PASS** | 全体の価格は毎日保存し、毎夜は保有＋active watchlistだけ100%照合する。月次は蓄積済み全体データから候補集合を見直し、再取得しない。 |
+| 人がAIへ一回指示 | **PASS** | `$japan-stock-operator`の夜間runがreadiness、調査、翌日アクション、ログ、引き継ぎを一巡する。 |
+| 明日の動きと今日のログ | **PASS** | `next-day-actions.csv`、`report.md`、`research-results.md`、`global-risk.md`、`handoff.json`を完了時に検証する。 |
+| ニュース・世界情勢 | **PASS（手動調査を含む）** | 為替、金利、資源、主要国政策、地政学を「事実→保有KPIへの伝播→判断」で保存する。一次資料未確認なら閉じない。 |
+| 長期・非デイトレ | **PASS** | 日次は例外確認、候補集合は月次、企業進捗は四半期。凍結済みv0.2の長期ルールを維持する。 |
+| ピンポイント注文不可 | **PAPERは可／現行LIVEはNO-GO** | 夜間は注文案まで。現行v0.2の翌朝8:45〜8:55確認を行えないならLIVEへ昇格しない。 |
 
-## 実装した修正
+## 株価データの安全境界
 
-### 株価collector
+正本は`.github/workflows/daily-stock-prices.yml`と`data/daily-prices/`である。関心銘柄だけを取得する別collectorやローカルlaunchdは置かず、二重取得・正本分裂を避けた。
 
-- `scripts/yahoo_price_collector.py`
-  - `daily`: portfolio＋active watchlistを1銘柄chart APIでOHLCV取得。100%成功必須。
-  - `monthly`: JPX月次一覧から内国株式全体を取得し、Yahooの10銘柄batchで終値系列を取得。99%以上かつactive対象100%を必須。
-  - query1/query2切替、3回再試行、TLS CA bundle、future/stale/zero-volume、欠損、checksumを検証。
-  - `(price_date, code)`で履歴を重複排除し、保有の`last_close`、倍率、`MA20`、`highest_ma20`、`DD20`を更新。
-- 失敗時は`BLOCKED`とし、成功watermarkを進めない。
-- 日次snapshotへ対象銘柄集合を固定し、現在の保有＋active watchlistと完全一致しなければ夜間runを開始しない。同日再実行は別attemptへ保存し、成功証跡を上書きしない。
+夜間runの前に次をすべて検証する。
 
-### 判断フロー
+1. `latest.json`がYahoo Financeの非公式データであることを明示している
+2. 最新CSVのSHA-256がmanifestと一致する
+3. 全市場の正常価格coverageが98%以上
+4. 保有＋active watchlistの全銘柄が`取得状態=OK`で、正のOHLCと非負整数出来高を持つ
+5. 価格日が未来でなく、7暦日を超えて古くない
+6. 31日以内のバックアップが存在し、checksumと作成時検証証拠が一致する
 
-- J-Quants日足をYahoo日次snapshotへ置換。J-Quants/EDINETキーがないPAPERは、AIが会社IR、TDnet/JPX、EDINET一次資料をWeb確認し、証拠を残すまで判断を閉じない。
-- 日次の世界情勢タスクと`global-risk.md`を追加。テンプレート状態のままではfinalizeを拒否する。
-- 初回開示lookbackを1日から7日に変更。
-- `paper_go`と`live_go`を別判定し、blockerを機械的に列挙する。
-- `nightly_operation.py start`もreadinessを再検証し、空母集団、snapshot不一致、31日超・消失・checksum不一致のバックアップがあればrun作成前に停止する。
-- 旧`source-config.json`はバックアップ後にYahoo構成へ移行する。
+Yahooは候補探索とPAPER計算用の二次価格源であり、売買判断の一次資料ではない。毎夜、会社IR、TDnet、EDINET、JPXの公式価格・コーポレートアクション、取引日カレンダーを別に確認する。確認できない項目は`WAIT`または`fail`とし、成功カットオフを進めない。
 
-### 自動実行
+## 実データ確認
 
-- `render_price_schedule.py`がworkspace内に安全なlaunchd定義を生成する。
-- 平日18:00は株価だけを自動収集し、AIはその後の人間の一回指示で起動する。
-- Scheduled taskを使う場合は、PCとデスクトップアプリが利用可能で、local projectへの書込・network許可が必要である。
+2026年8月31日のtracked archiveは次の証拠を持つ。
 
-## 実データ検証
+- JPX現行内国株式: 3,713銘柄
+- Yahoo取得成功: 3,713 / 3,713、取得エラー0
+- 正常価格: 3,669 / 3,713（98.81%）
+- 最新CSV: `data/daily-prices/2026/2026-08-31.csv`
+- SHA-256: `019db4bc27932bafb0040443e9c2bb9d2fc33c5018fb884a5daaac6ec0a96d8a`
+- 実データのactive対象検証例: `4477`を100%照合し、OHLCV・鮮度・checksumに合格
 
-### Yahoo実API
+これはYahoo実APIで取得された株価データの整合性確認であり、公式価格確認、投資成績、point-in-time全母集団、前向きPAPER期間を証明しない。
 
-- 日次chart: `4477 BASE`、64行、最新2026-08-31、coverage 100%、API error 0。
-- 3銘柄batch: `1301 / 4477 / 7203`、62行、API error 0。
-- 月次50銘柄: 50/50、screen 50行、API error 0。
-- JPX実ファイル: 内国株式3,713銘柄を認識。
-- 月次全市場: 応答3,713/3,713、鮮度合格3,704/3,713（99.76%）、API error 0、screen 3,708行、所要約96秒。
-  - 9銘柄は最終価格が7日超前で`stale_codes`へ記録。
-  - 5銘柄は20観測未満のためscreen対象外。
-  - 月次batchは過去出来高を返さないため、流動性は未確認として明示し、active昇格後の日次OHLCVで確認する。
+回帰確認では単体・統合テスト104件、Python compile、`git diff --check`が成功した。20営業日のオフライン状態遷移も20件完了、broker submission 0、重複注文0で成功した。ただしオフラインsmokeは実データ20営業日LIVEゲートの代替ではない。
 
-### 回帰検証
+現在のprivate設定へ2026年9月1日18:30 JSTを指定してreadinessを実行した結果、PAPER blockerは次の2件だった。
 
-- 単体・統合テスト: **93件すべて成功**。
-- `python -m compileall -q scripts tests`: 成功。
-- `git diff --check`: 成功。
-- 20営業日オフライン状態遷移: 20完了、broker submission 0。
+- `active universe is empty; review the tracked full-market archive and activate candidates`
+- `no verified operation backup has been recorded`
 
-オフライン20日試験はLIVEゲートの実データ20営業日ではない。Yahoo実データを使う前向き20日分のsnapshotと夜間runを別に蓄積する。
+EDINET APIキー未設定はPAPER blockerではなく手動一次資料fallbackの警告である。LIVEでは必須情報源coverageの一部としてblockerのままとなる。
 
-## PAPERをGOにする残作業
+## PAPERをGOにする手順
 
-`operation_bootstrap.py check`の`paper_blockers`を0件にする。
+1. 利用者が少数の監視銘柄を指定するか、月次候補レビューで一次資料を確認した銘柄を`watchlist.csv`のactiveへ登録する。全3,713銘柄の手入力は不要。
+2. 現在保有があれば数量・原価を`portfolio-register.csv`へ正確に登録する。保有していない銘柄を推測で登録しない。
+3. 最新データPRを確認・マージし、夜間運用を行う永続checkoutへ最新`main`を反映する。
+4. PAPER用バックアップを作成して検証する。可能なら最初から`age`暗号化を使う。
+5. `.venv/bin/python scripts/operation_bootstrap.py check`で`paper_blockers`が0件、`paper_go: true`であることを確認する。
+6. 人が「今日のタスクを実行して」と1回依頼し、一次資料、世界情勢、全アクション、ログを確認してfinalizeする。
 
-1. 月次screenをAIが一次資料で確認し、少数の関心銘柄をactive watchlistへ登録する。利用者が全銘柄を手入力する必要はない。
-2. `.venv/bin/python scripts/yahoo_price_collector.py collect --scope daily`を成功させる。
-3. PAPER用バックアップを作成・verifyする。可能なら最初から`age`暗号化を使う。
-4. PRマージ後の永続checkoutでlaunchd定義を生成・登録し、翌日に自動実行ログを確認する。
-5. 人が「今日のタスクを実行して」と1回依頼し、一次資料、世界情勢、全アクション、ログをfinalizeする。
-
-公式APIキーはPAPERの価格取得には不要になった。キーがない場合、公式開示の確認はAIの一次資料Web調査が毎回必須である。取得できない日は`WAIT`または`fail`にする。
+EDINET APIキーはPAPER開始の必須条件ではない。ただしキーがない場合は毎回の手動一次資料確認が必須であり、取得不能なら売買判断を作らない。
 
 ## LIVEをGOにする追加条件
 
-| 条件 | 実施だけで可能か | 現状 |
+| 条件 | 実行するだけで可能か | 現状 |
 |---|---|---|
-| point-in-time全母集団 | データ契約・履歴調達が必要 | 未着手。現在のJPX月次一覧とYahooだけでは過去上場廃止を完全復元できない。 |
-| 最低12か月PAPER | 時間経過が必要 | 短縮不可。前向きに蓄積する。 |
-| 実データ20営業日、重大漏れ・重複0 | 自動監査可能 | collectorとrunを20営業日動かした後に判定する。 |
-| 公式情報源カバレッジ | API契約または毎回の網羅証拠が必要 | PAPERは手動fallback可、LIVEは自動化・契約を推奨。 |
-| backup/restore | 実施可能 | `age`、秘密鍵管理、別媒体が必要。 |
-| 損失許容・税・証券会社仕様 | 利用者本人の確認が必要 | AIだけでは確定不可。 |
-| 注文可能時間 | 利用者本人の確認または新版検証が必要 | 現行v0.2と利用可能時間が不一致。 |
-| 明示承認 | 利用者本人が最後に行う | 未承認。 |
+| point-in-time全母集団検証 | 履歴データの調達・再生・人の受入が必要 | 未完了 |
+| 2025–2026履歴再生の受入 | 不足する当時点データと人の受入が必要 | 未承認 |
+| 最低12か月PAPER | 実時間の経過が必要 | 未完了。履歴再生で代替しない |
+| 実データ20営業日、重大漏れ・重複0 | 前向きrunと監査が必要 | 未完了。オフラインsmokeでは代替しない |
+| 公式情報源coverage | APIまたは毎回の網羅証拠が必要 | 未完了 |
+| backup/restore | 実施可能 | `age`、秘密鍵管理、別媒体が必要 |
+| 損失許容・税・証券会社仕様 | 利用者本人の確認が必要 | 未確認 |
+| 注文可能時間 | 利用者本人の確認または新しい執行版のPAPER検証が必要 | 現行条件と不一致 |
+| 明示承認 | 利用者本人が最後に行う | 未承認 |
 
-したがってLIVEは「コードを実行するだけ」ではGOにならない。特に12か月、過去時点データ、個人条件、注文可能時間、最終承認は外部条件である。
+したがってLIVEは、コードや一括スクリプトを実行するだけではGOにならない。履歴再生と最低12か月PAPERは別々に要求し、個人条件と最終承認も自動で真にしない。
 
 ## 参照
 

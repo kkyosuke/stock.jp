@@ -59,10 +59,7 @@ class DailyAutomationRunbookTest(unittest.TestCase):
             "research-results-template.md",
             "next-day-actions-template.csv",
             "watchlist.csv",
-            "price-history.csv",
-            "market-data-state-template.json",
             "global-risk-template.md",
-            "com.stockjp.price-collector.plist",
         ):
             self.assertTrue((ROOT / "operations/templates" / filename).is_file())
 

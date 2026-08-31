@@ -16,6 +16,7 @@ from scripts.official_source_scan import (
 )
 from scripts.operation_backup import create_backup
 from scripts.operation_state import PROJECT_ROOT, initialize_or_migrate_workspace
+from tests.operation_test_support import write_price_archive
 
 FIXTURES = PROJECT_ROOT / "tests/fixtures/official-source-scan"
 
@@ -37,6 +38,7 @@ class OfficialSourceScanTest(unittest.TestCase):
         position.update({"code": "1234", "company": "Example", "status": "OPEN"})
         with portfolio.open("a", encoding="utf-8", newline="") as destination:
             csv.DictWriter(destination, fieldnames=fields).writerow(position)
+        write_price_archive(self.root, ["1234"])
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -68,16 +70,24 @@ class OfficialSourceScanTest(unittest.TestCase):
         with (run_dir / "sources.csv").open(encoding="utf-8", newline="") as source:
             sources = list(csv.DictReader(source))
 
-        self.assertEqual(result["status"], "COMPLETED")
+        self.assertEqual(result["status"], "PARTIAL")
         self.assertEqual(health["providers"]["edinet"]["status"], "OK")
-        self.assertEqual(health["providers"]["jquants_tdnet"]["status"], "OK")
+        self.assertEqual(
+            health["providers"]["yahoo_tracked_archive"]["status"], "OK"
+        )
+        self.assertEqual(
+            health["providers"]["first_party_public_checks"]["status"], "PENDING"
+        )
         self.assertEqual(coverage["official_sources"]["edinet"]["status"], "CHECKED")
-        self.assertEqual(coverage["official_sources"]["tdnet"]["status"], "CHECKED")
+        self.assertEqual(coverage["official_sources"]["tdnet"]["status"], "PENDING")
         self.assertEqual(coverage["official_sources"]["company_ir"]["status"], "PENDING")
-        self.assertIn("tdnet-20260831000001", {row["source_id"] for row in sources})
         self.assertIn("edinet-S100TEST", {row["source_id"] for row in sources})
         self.assertIn(
             "manual-company-ir-2026-08-31-1234",
+            {task["task_id"] for task in queue["tasks"]},
+        )
+        self.assertIn(
+            "manual-tdnet-2026-08-31",
             {task["task_id"] for task in queue["tasks"]},
         )
         self.assertTrue((run_dir / "raw-sources/edinet-2026-08-31.json").is_file())
@@ -102,9 +112,7 @@ class OfficialSourceScanTest(unittest.TestCase):
         self.assertEqual(
             coverage["official_sources"]["edinet"]["status"], "UNAVAILABLE"
         )
-        self.assertEqual(
-            coverage["official_sources"]["tdnet"]["status"], "UNAVAILABLE"
-        )
+        self.assertEqual(coverage["official_sources"]["tdnet"]["status"], "PENDING")
         self.assertTrue(
             all(gap["severity"] == "CRITICAL" for gap in coverage["data_gaps"])
         )
@@ -176,7 +184,7 @@ class OfficialSourceScanTest(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "PARTIAL")
-        self.assertEqual(result["blocking_gap_count"], 1)
+        self.assertEqual(result["blocking_gap_count"], 4)
 
     def test_agent_can_close_fixture_run_after_manual_primary_checks(self) -> None:
         prepared = self._prepare()
@@ -218,6 +226,14 @@ class OfficialSourceScanTest(unittest.TestCase):
                 "title": "JPX notices checked",
                 "url": "https://www.jpx.co.jp/",
             })
+            writer.writerow({
+                **common,
+                "source_id": "tdnet-query-check",
+                "category": "tdnet",
+                "code": "",
+                "title": "TDnet checked through cutoff",
+                "url": "https://www.release.tdnet.info/inbs/I_main_00.html",
+            })
 
         queue_path = run_dir / "research-queue.json"
         queue = json.loads(queue_path.read_text(encoding="utf-8"))
@@ -237,10 +253,25 @@ class OfficialSourceScanTest(unittest.TestCase):
         )
         coverage["universe"]["holdings"]["checked"] = ["1234"]
         coverage["official_sources"]["company_ir"]["status"] = "CHECKED"
+        coverage["official_sources"]["tdnet"]["status"] = "CHECKED"
         coverage["official_sources"]["jpx"]["status"] = "CHECKED"
+        for gap in coverage["data_gaps"]:
+            gap["status"] = "RESOLVED"
+            gap["resolved_at_jst"] = "2026-08-31T19:00:00+09:00"
+            gap["resolution_evidence"] = "jpx-notices-check"
         coverage["completed_at_jst"] = "2026-08-31T19:00:00+09:00"
         coverage_path.write_text(
             json.dumps(coverage, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        handoff_path = run_dir / "handoff.json"
+        handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
+        for gap in handoff["data_gaps"]:
+            gap["status"] = "RESOLVED"
+            gap["resolved_at_jst"] = "2026-08-31T19:00:00+09:00"
+            gap["resolution_evidence"] = "jpx-notices-check"
+        handoff_path.write_text(
+            json.dumps(handoff, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
         report_path = run_dir / "report.md"

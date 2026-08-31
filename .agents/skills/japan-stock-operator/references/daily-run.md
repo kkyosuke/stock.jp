@@ -5,15 +5,15 @@ Use this workflow when the request is “today's run,” a scheduled operation, 
 ## Start or resume once at night
 
 1. Read `docs/nightly-operation-v0.1.md`, `docs/daily-automation-runbook-v0.1.md`, `operations/private/operation-policy.json`, and the canonical rule files named in `SKILL.md`.
-2. Confirm that the scheduled daily Yahoo snapshot is `COMPLETED`, checksum-valid, fresh, and covers exactly the current holdings plus active watchlist. Run `scripts/operation_bootstrap.py check`; stop on every blocker. Do not reuse a snapshot after the active universe changes.
-3. Run `scripts/nightly_operation.py start --at <current aware JST timestamp> --cutoff <declared JST cutoff>` and retain the returned `run_token`. The entry point repeats the readiness check, validates state, prepares or resumes the run, scans official APIs, confirms the next trading date, and creates due work. If it returns `locked`, do not start a second run.
+2. Run `scripts/operation_bootstrap.py check` first. It must verify the merged tracked Yahoo archive checksum, at least 98% full-market coverage, 100% active-target coverage, freshness, and a current verified backup. Stop on any PAPER blocker; Yahoo is an unofficial secondary price source.
+3. Run `scripts/nightly_operation.py start --at <current aware JST timestamp> --cutoff <declared JST cutoff>` and retain the returned `run_token`. Start repeats readiness before creating a run, scans EDINET, and creates due first-party checks. Confirm company IR, TDnet, official prices/corporate actions, and the next JPX cash-equity trading date from their primary pages before closing the run. If it returns `locked`, do not start a second run.
 4. Read `provider-health.json`, `research-queue.json`, `work-plan.json`, `coverage.json`, `operations/private/state.json`, the previous run's `handoff.json` when present, `portfolio-register.csv`, `watchlist.csv`, and the trade, recovered-capital, cash, corporate-action, rebuy-restriction, and industry-exposure ledgers.
 5. If the returned run status is already `completed`, report that the date was already closed. Do not create duplicate orders.
 6. If it is `in_progress`, resume the existing files rather than replacing them.
 
 ## Cover the required universe
 
-Process every task in both `research-queue.json` and `work-plan.json`. Check company IR and JPX notices in their primary sites even when the machine APIs succeed. Mark a task `COMPLETED` only with `evidence_source_ids`; defer it only by copying the same task ID into `handoff.pending_reviews`.
+Process every task in both `research-queue.json` and `work-plan.json`. Check TDnet, company IR, official prices/corporate actions, JPX notices, and the cash-equity calendar in their primary sites. Mark a task `COMPLETED` only with `evidence_source_ids`; defer it only by copying the same task ID into `handoff.pending_reviews`.
 
 When an `operations_backup` task is due, run `scripts/operation_backup.py create --at <current aware JST timestamp>`. It uses `OPERATION_BACKUP_AGE_RECIPIENT` when configured. Never add `--allow-plaintext` unless the user explicitly authorized a plaintext PAPER backup. Record the resulting private archive path as `internal:backup:<path>` evidence; if encryption is unavailable, defer the task and report the setup action.
 
@@ -23,9 +23,11 @@ Include other modes only when due:
 
 - Daily event checks on every run
 - Weekly checks on Friday or when a missed weekly review is queued
-- Monthly checks after the final trading session's values are available or when queued. First run `scripts/yahoo_price_collector.py collect --scope monthly`; require a completed 99%+ JPX-universe snapshot and record its private path as evidence before reviewing or promoting candidates
+- Monthly checks after the final trading session's values are available or when queued
 - Quarterly checks when a new quarterly disclosure starts the five-trading-day review window
 - Full-year checks when a new full-year disclosure starts the ten-trading-day review window
+
+For a monthly check, use the already accumulated daily full-market archive and the current JPX list to revise the candidate set. Do not repeat the same Yahoo acquisition; review primary evidence only for the narrowed candidates.
 
 Record due work that cannot be completed in `handoff.json` under `pending_reviews`. Do not silently drop it.
 
@@ -35,6 +37,7 @@ Update the current run's:
 
 - `work-plan.json` with every due review in `COMPLETED` or explicit `DEFERRED`
 - `research-results.md` with a completed, human-readable summary of all due research
+- `global-risk.md` with completed facts, transmission to portfolio KPIs, and the resulting judgment for FX, rates, resources, major-country policy, and geopolitics
 - `next-day-actions.csv` with exactly one auditable next-session action for every holding and watchlist code
 - `report.md` with coverage, exceptions, decisions, due reviews, data gaps, human actions, and the next run
 - `sources.csv` with publication time, retrieval time, URL, and whether it is a primary source
@@ -50,7 +53,7 @@ Append each proposal, paper fill, human-reported fill, cancellation, and expirat
 
 ## Close safely
 
-Call `scripts/nightly_operation.py finalize` with the same `run_token` only after all holdings, pending orders, required disclosure sources, due tasks, research results, and next-day actions have been checked through the declared cutoff. A non-critical data gap may remain only as a structured item with its impact and retry time.
+Call `scripts/nightly_operation.py finalize` with the same `run_token` only after all holdings, pending orders, required disclosure sources, due tasks, research results, global risk, and next-day actions have been checked through the declared cutoff. A non-critical data gap may remain only as a structured item with its impact and retry time.
 
 Call `fail` with the same `run_token` if a required source or a material part of the universe could not be checked. A failed run must not advance the successful disclosure cutoff. Leave partial files intact for audit and retry.
 

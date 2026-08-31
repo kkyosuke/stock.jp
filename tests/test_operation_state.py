@@ -147,10 +147,7 @@ class OperationStateTest(unittest.TestCase):
         config_path = private / "source-config.json"
         legacy = {
             "schema_version": "1.0",
-            "jquants": {
-                "enabled": True,
-                "daily_bars_enabled": True,
-            },
+            "jquants": {"enabled": True},
         }
         config_path.write_text(json.dumps(legacy) + "\n", encoding="utf-8")
 
@@ -164,11 +161,37 @@ class OperationStateTest(unittest.TestCase):
         self.assertIn("operations/private/source-config.json", result["migrated"])
         self.assertEqual(migrated["schema_version"], "1.1")
         self.assertEqual(
-            migrated["price_source"]["provider"], "yahoo_finance_unofficial"
+            migrated["price_source"]["provider"],
+            "yahoo_finance_unofficial_tracked_archive",
         )
-        self.assertFalse(migrated["jquants"]["daily_bars_enabled"])
+        self.assertNotIn("jquants", migrated)
         self.assertEqual(entries[-1]["from_schema"], "1.0")
         self.assertEqual(entries[-1]["to_schema"], "1.1")
+
+    def test_migrates_new_live_gate_without_changing_legacy_decisions(self) -> None:
+        initialize_or_migrate_workspace(self.root)
+        private = self.root / "operations/private"
+        policy_path = private / "operation-policy.json"
+        policy = json.loads(policy_path.read_text(encoding="utf-8"))
+        policy["live_gates"].pop("minimum_12_month_paper_trade")
+        policy["live_gate_evidence"].pop("minimum_12_month_paper_trade")
+        policy["live_gates"]["historical_replay_2025_2026_accepted"] = True
+        policy["live_gate_evidence"]["historical_replay_2025_2026_accepted"] = (
+            "operations/private/evidence/replay.md"
+        )
+        policy_path.write_text(json.dumps(policy) + "\n", encoding="utf-8")
+
+        result = initialize_or_migrate_workspace(self.root)
+        migrated = json.loads(policy_path.read_text(encoding="utf-8"))
+
+        self.assertIn("operations/private/operation-policy.json", result["migrated"])
+        self.assertFalse(migrated["live_gates"]["minimum_12_month_paper_trade"])
+        self.assertIsNone(
+            migrated["live_gate_evidence"]["minimum_12_month_paper_trade"]
+        )
+        self.assertTrue(
+            migrated["live_gates"]["historical_replay_2025_2026_accepted"]
+        )
 
 
 if __name__ == "__main__":

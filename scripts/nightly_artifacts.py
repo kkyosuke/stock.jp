@@ -203,7 +203,7 @@ def build_due_tasks(
                     f"{run_id}-monthly",
                     "monthly",
                     "NORMAL",
-                    "Yahoo月次全JPX価格スキャン後の候補集合・市場レジーム見直し",
+                    "蓄積済み全市場日足とJPX一覧による候補集合・市場レジーム見直し",
                     due_at,
                 )
             )

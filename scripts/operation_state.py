@@ -34,8 +34,6 @@ TEMPLATE_TO_PRIVATE = {
     "schema-migration-log.csv": "schema-migration-log.csv",
     "source-watermarks.json": "source-watermarks.json",
     "source-config-template.json": "source-config.json",
-    "price-history.csv": "price-history.csv",
-    "market-data-state-template.json": "market-data-state.json",
 }
 
 CSV_MIGRATIONS = {
@@ -110,19 +108,35 @@ def _normalized_source_config(
     config: dict[str, Any], template: dict[str, Any]
 ) -> dict[str, Any]:
     version = str(config.get("schema_version", ""))
-    if version == "1.1":
-        return config
-    if version != "1.0":
+    if version not in {"1.0", "1.1"}:
         raise ValueError(f"unsupported source config schema: {version!r}")
     normalized = {**template, **config}
-    for section in ("price_source", "jquants", "edinet", "manual_primary_sources"):
+    for section in ("price_source", "edinet", "manual_primary_sources"):
         normalized[section] = {
             **template.get(section, {}),
             **config.get(section, {}),
         }
     normalized["schema_version"] = "1.1"
-    if "price_source" not in config:
-        normalized["jquants"]["daily_bars_enabled"] = False
+    normalized.pop("jquants", None)
+    return normalized
+
+
+def _normalized_policy(
+    policy: dict[str, Any], template: dict[str, Any]
+) -> dict[str, Any]:
+    if policy.get("schema_version") != "1.0":
+        return policy
+    normalized = dict(policy)
+    gates = policy.get("live_gates")
+    evidence = policy.get("live_gate_evidence")
+    normalized["live_gates"] = {
+        **template.get("live_gates", {}),
+        **(gates if isinstance(gates, dict) else {}),
+    }
+    normalized["live_gate_evidence"] = {
+        **template.get("live_gate_evidence", {}),
+        **(evidence if isinstance(evidence, dict) else {}),
+    }
     return normalized
 
 
@@ -173,6 +187,14 @@ def _planned_migrations(root: Path) -> list[tuple[Path, Path | None]]:
         )
         if _normalized_source_config(source_config, source_template) != source_config:
             planned.append((source_config_path, None))
+    policy_path = private / "operation-policy.json"
+    if policy_path.is_file():
+        policy = json.loads(policy_path.read_text(encoding="utf-8"))
+        policy_template = json.loads(
+            (templates / "operation-policy.json").read_text(encoding="utf-8")
+        )
+        if _normalized_policy(policy, policy_template) != policy:
+            planned.append((policy_path, None))
     for private_name, template_name in CSV_MIGRATIONS.items():
         path = private / private_name
         template = templates / template_name
@@ -262,6 +284,17 @@ def initialize_or_migrate_workspace(
             _atomic_write_json(path, normalized)
             schema_changes.append(
                 ("source-config", source_schema, str(normalized["schema_version"]))
+            )
+        elif path.name == "operation-policy.json":
+            policy = json.loads(path.read_text(encoding="utf-8"))
+            source_schema = str(policy.get("schema_version"))
+            policy_template = json.loads(
+                (templates / "operation-policy.json").read_text(encoding="utf-8")
+            )
+            normalized = _normalized_policy(policy, policy_template)
+            _atomic_write_json(path, normalized)
+            schema_changes.append(
+                ("operation-policy", source_schema, str(normalized["schema_version"]))
             )
         else:
             if template is None:

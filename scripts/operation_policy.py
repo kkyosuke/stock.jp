@@ -15,6 +15,7 @@ VALID_MODES = {"PAPER", "LIVE", "PAUSED"}
 VALID_SUBMISSION = {"HUMAN_ONLY"}
 REQUIRED_LIVE_GATES = {
     "point_in_time_full_universe_validation",
+    "historical_replay_2025_2026_accepted",
     "minimum_12_month_paper_trade",
     "twenty_day_shadow_run",
     "official_source_coverage",

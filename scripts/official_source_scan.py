@@ -4,16 +4,15 @@ from __future__ import annotations
 
 import argparse
 import csv
+from datetime import date, datetime, time, timedelta
 import hashlib
 import json
-import math
 import os
 import ssl
+from pathlib import Path
 import tempfile
 import time as time_module
 from collections.abc import Mapping
-from datetime import date, datetime, time, timedelta
-from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -27,9 +26,11 @@ try:
         initialize_or_migrate_workspace,
         secure_private_tree,
     )
+    from scripts.price_snapshot import validate_tracked_price_snapshot
     from scripts.run_integrity import SOURCE_FIELDS, require_run_lease
 except ModuleNotFoundError:  # Direct execution from scripts/
     from operation_state import initialize_or_migrate_workspace, secure_private_tree
+    from price_snapshot import validate_tracked_price_snapshot
     from run_integrity import SOURCE_FIELDS, require_run_lease
 
 
@@ -69,90 +70,12 @@ def _source_config(root: Path, private: Path) -> dict[str, Any]:
     template = _read_json(root / "operations/templates/source-config-template.json")
     configured = _read_json(private / "source-config.json")
     merged = {**template, **configured}
-    for section in ("price_source", "edinet", "jquants", "manual_primary_sources"):
+    for section in ("price_source", "edinet", "manual_primary_sources"):
         merged[section] = {
             **template.get(section, {}),
             **configured.get(section, {}),
         }
     return merged
-
-
-def _active_target_codes(private: Path) -> set[str]:
-    result: set[str] = set()
-    for filename, active_field, active_values in (
-        ("portfolio-register.csv", "status", {"OPEN", "ACTIVE", "HELD"}),
-        ("watchlist.csv", "active", {"TRUE", "1", "YES", "ACTIVE"}),
-    ):
-        with (private / filename).open(encoding="utf-8", newline="") as source:
-            for row in csv.DictReader(source):
-                if str(row.get(active_field, "")).strip().upper() in active_values:
-                    code = _normalize_code(row.get("code"))
-                    if code:
-                        result.add(code)
-    return result
-
-
-def _yahoo_snapshot(
-    *,
-    root: Path,
-    private: Path,
-    cutoff: datetime,
-    config: dict[str, Any],
-    active_targets: set[str],
-) -> tuple[dict[str, Any] | None, str]:
-    state_path = private / "market-data-state.json"
-    if not state_path.is_file():
-        return None, "daily Yahoo price collection has never completed"
-    state = _read_json(state_path)
-    relative = str(state.get("last_snapshot_path") or "")
-    if not relative:
-        return None, "daily Yahoo price collection has never completed"
-    snapshot = (root / relative).resolve()
-    snapshot_root = (private / "market-snapshots").resolve()
-    if not snapshot.is_relative_to(snapshot_root):
-        return None, "latest Yahoo snapshot path is outside the private snapshot root"
-    manifest_path = snapshot / "manifest.json"
-    raw_path = snapshot / "yahoo-raw.json"
-    if not manifest_path.is_file() or not raw_path.is_file():
-        return None, "latest Yahoo snapshot files are missing"
-    manifest = _read_json(manifest_path)
-    if manifest.get("status") != "COMPLETED" or manifest.get("scope") != "daily":
-        return None, "latest Yahoo snapshot is not a completed daily snapshot"
-    raw_targets = manifest.get("target_codes")
-    if not isinstance(raw_targets, list):
-        return None, "latest Yahoo snapshot target-universe evidence is invalid"
-    snapshot_targets = {
-        _normalize_code(code) for code in raw_targets if _normalize_code(code)
-    }
-    if snapshot_targets != active_targets:
-        return None, "latest Yahoo snapshot does not match the current active universe"
-    try:
-        coverage = float(manifest["coverage_ratio"])
-        required = float(
-            config.get("price_source", {}).get("minimum_daily_coverage", 1.0)
-        )
-        if not math.isfinite(coverage) or not 0 <= coverage <= 1:
-            raise ValueError
-        if not math.isfinite(required) or not 0 <= required <= 1:
-            raise ValueError
-    except (KeyError, TypeError, ValueError):
-        return None, "latest Yahoo snapshot coverage evidence is invalid"
-    if coverage < required:
-        return None, "latest Yahoo snapshot coverage is below the daily minimum"
-    if hashlib.sha256(raw_path.read_bytes()).hexdigest() != manifest.get("raw_sha256"):
-        return None, "latest Yahoo snapshot checksum mismatch"
-    try:
-        price_date = date.fromisoformat(str(manifest["price_date"]))
-    except (KeyError, TypeError, ValueError):
-        return None, "latest Yahoo snapshot price date is invalid"
-    maximum_age = int(
-        config.get("price_source", {}).get("maximum_latest_price_age_days", 7)
-    )
-    if price_date > cutoff.date() or (cutoff.date() - price_date).days > maximum_age:
-        return None, "latest Yahoo snapshot is future-dated or stale"
-    if manifest.get("critical_failures"):
-        return None, "latest Yahoo snapshot has critical target failures"
-    return manifest, ""
 
 
 def _normalize_code(value: Any) -> str:
@@ -230,37 +153,6 @@ def _request_json(
     if not isinstance(payload, dict):
         raise SourceScanError(f"unexpected JSON shape from {public_url}")
     return payload
-
-
-def _jquants_pages(
-    *,
-    base_url: str,
-    path: str,
-    params: dict[str, str],
-    api_key: str,
-    timeout: int,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    rows: list[dict[str, Any]] = []
-    pages: list[dict[str, Any]] = []
-    query = dict(params)
-    for _ in range(100):
-        payload = _request_json(
-            base_url=base_url,
-            path=path,
-            params=query,
-            headers={"x-api-key": api_key},
-            timeout=timeout,
-        )
-        pages.append(payload)
-        data = payload.get("data", [])
-        if not isinstance(data, list):
-            raise SourceScanError(f"unexpected data field from {path}")
-        rows.extend(row for row in data if isinstance(row, dict))
-        pagination_key = payload.get("pagination_key")
-        if not pagination_key:
-            return rows, pages
-        query["pagination_key"] = str(pagination_key)
-    raise SourceScanError(f"pagination limit exceeded for {path}")
 
 
 def _fixture_payload(fixture_dir: Path, stem: str) -> dict[str, Any]:
@@ -519,6 +411,59 @@ def scan_sources(
             "error": error,
         }
 
+    price_snapshot, price_failures = validate_tracked_price_snapshot(
+        root=root,
+        active_targets=targets,
+        cutoff=cutoff_at,
+        config=config,
+    )
+    if price_snapshot:
+        record_provider(
+            "yahoo_tracked_archive",
+            "OK",
+            0,
+            int(price_snapshot["quote_count"]),
+        )
+        source_rows.append(
+            {
+                "source_id": (
+                    f"yahoo-price-{price_snapshot['price_date']}-"
+                    f"{str(price_snapshot['session_sha256'])[:12]}"
+                ),
+                "category": "market_data",
+                "code": "",
+                "title": (
+                    "Checksum-verified tracked Yahoo daily archive "
+                    f"({price_snapshot['target_count']} active targets)"
+                ),
+                "published_at_jst": (
+                    f"{price_snapshot['price_date']}T15:30:00+09:00"
+                ),
+                "retrieved_at_jst": retrieved,
+                "url": (
+                    "https://github.com/kkyosuke/stock.jp/blob/main/"
+                    f"{price_snapshot['session_path']}"
+                ),
+                "primary_source": "false",
+                "used_for_decision": "true",
+                "notes": (
+                    "unofficial secondary source; every target is present with OK OHLCV; "
+                    "official price and corporate-action confirmation remains pending"
+                ),
+            }
+        )
+    else:
+        error = "; ".join(price_failures)
+        record_provider("yahoo_tracked_archive", "ERROR", 0, 0, error)
+        gap = _gap(
+            gap_id=f"{run_id}-tracked_market_data",
+            source="tracked_market_data",
+            impact="tracked daily prices are incomplete; every price-based decision is blocked",
+            retry_after=retry_after,
+        )
+        gaps.append(gap)
+        health["blocking_gaps"].append(gap["gap_id"])
+
     edinet_config = config.get("edinet", {})
     edinet_key = environment.get(str(edinet_config.get("api_key_env", "")), "")
     edinet_records = 0
@@ -619,273 +564,52 @@ def scan_sources(
         health["blocking_gaps"].append(gap["gap_id"])
         coverage["official_sources"]["edinet"]["status"] = "UNAVAILABLE"
 
-    jq_config = dict(config.get("jquants", {}))
-    if fixture_dir and (
-        fixture_dir / f"jquants-bars-daily-{cutoff_at.date().isoformat()}.json"
-    ).is_file():
-        jq_config["daily_bars_enabled"] = True
-    jq_key = environment.get(str(jq_config.get("api_key_env", "")), "")
-    jq_available = bool(jq_config.get("enabled")) and (bool(fixture_dir) or bool(jq_key))
-    jq_specs = (
-        ("jquants_tdnet", "td-list", "td/list", "tdnet_enabled"),
-        ("jquants_financials", "fins-summary", "fins/summary", "financial_summary_enabled"),
-        ("jquants_market_data", "bars-daily", "equities/bars/daily", "daily_bars_enabled"),
+    # TDnet, official closing prices and the cash-equity calendar are checked
+    # against their first-party public pages by the research agent. Until that
+    # evidence is attached, fail closed instead of treating a secondary feed as
+    # authoritative.
+    manual_checks = (
+        (
+            "tdnet",
+            "material timely disclosures could be missing; trade decisions are blocked",
+            "Check TDnet disclosures through the cutoff and attach query evidence",
+        ),
+        (
+            "official_market_data",
+            "official price inputs are incomplete; new and additional buys are blocked",
+            "Confirm target prices and corporate actions with JPX, company IR, or brokerage evidence",
+        ),
+        (
+            "trading_calendar",
+            "the next trading date is unconfirmed; order tickets are blocked",
+            "Confirm the next cash-equity trading date with JPX calendar evidence",
+        ),
     )
-    for provider, fixture_stem, endpoint, enabled_key in jq_specs:
-        if not jq_config.get(enabled_key):
-            record_provider(provider, "DISABLED", 0, 0)
-            continue
-        if not jq_available:
-            record_provider(provider, "MISSING_CREDENTIAL", 0, 0, "JQUANTS_API_KEY is not set")
-            continue
-        provider_rows: list[dict[str, Any]] = []
-        request_count = 0
-        try:
-            for scan_date in scan_dates:
-                stem = f"jquants-{fixture_stem}-{scan_date.isoformat()}"
-                if fixture_dir:
-                    rows, pages = _fixture_rows(fixture_dir, stem, "data")
-                else:
-                    rows, pages = _jquants_pages(
-                        base_url=str(jq_config["base_url"]),
-                        path=endpoint,
-                        params={"date": scan_date.strftime("%Y%m%d")},
-                        api_key=jq_key,
-                        timeout=timeout,
-                    )
-                request_count += len(pages)
-                provider_rows.extend(rows)
-                _atomic_json(raw_dir / f"{stem}.json", {"pages": pages})
-                category = "tdnet" if provider == "jquants_tdnet" else provider
-                source_rows.append(
-                    _query_evidence(
-                        category=category,
-                        provider=provider,
-                        scan_date=scan_date,
-                        cutoff=cutoff_at,
-                        retrieved_at=started,
-                        count=len(rows),
-                        url=f"{str(jq_config['base_url']).rstrip('/')}/{endpoint}?date={scan_date.strftime('%Y%m%d')}",
-                    )
-                )
-            record_provider(provider, "OK", request_count, len(provider_rows))
-            if provider == "jquants_tdnet":
-                coverage["official_sources"]["tdnet"]["status"] = "CHECKED"
-            successful_gap_sources.add(provider)
-            if provider == "jquants_tdnet":
-                successful_gap_sources.add("tdnet")
-            for row in provider_rows:
-                code = _normalize_code(row.get("Code"))
-                if code not in targets:
-                    continue
-                if provider == "jquants_tdnet":
-                    disc_no = str(row.get("DiscNo", ""))
-                    source_id = f"tdnet-{disc_no or _stable_id(json.dumps(row, sort_keys=True))}"
-                    published = _normalize_timestamp(row.get("DiscDate"), row.get("DiscTime"))
-                    title = str(row.get("Title") or "TDnet disclosure")
-                    category = "tdnet"
-                elif provider == "jquants_financials":
-                    disc_no = str(row.get("DiscNo", ""))
-                    source_id = f"jq-fin-{disc_no or _stable_id(json.dumps(row, sort_keys=True))}"
-                    published = _normalize_timestamp(row.get("DiscDate"), row.get("DiscTime"))
-                    title = f"J-Quants financial summary {row.get('DocType', '')}"
-                    category = "jquants_financials"
-                else:
-                    continue
-                if _parse_jst(published) > cutoff_at:
-                    continue
-                source_rows.append(
-                    _source_row(
-                        source_id=source_id,
-                        category=category,
-                        code=code,
-                        title=title,
-                        published_at=published,
-                        retrieved_at=retrieved,
-                        url=f"{str(jq_config['base_url']).rstrip('/')}/{endpoint}",
-                        notes="J-Quants API V2 private retrieval",
-                    )
-                )
-                tasks.append(
-                    _task(
-                        task_id=f"review-{source_id}",
-                        task_type="DISCLOSURE_REVIEW",
-                        priority="URGENT" if provider == "jquants_tdnet" else "HIGH",
-                        code=code,
-                        reason=f"New {provider} record for an active target",
-                        source_ids=[source_id],
-                    )
-                )
-        except (KeyError, SourceScanError, ValueError) as error:
-            record_provider(provider, "ERROR", request_count, len(provider_rows), str(error))
-
-    calendar_status = "DISABLED"
-    if jq_config.get("market_calendar_enabled"):
-        if not jq_available:
-            record_provider(
-                "jquants_calendar",
-                "MISSING_CREDENTIAL",
-                0,
-                0,
-                "JQUANTS_API_KEY is not set",
-            )
-            calendar_status = "MISSING_CREDENTIAL"
-        else:
-            try:
-                calendar_end = cutoff_at.date() + timedelta(days=14)
-                if fixture_dir:
-                    calendar_rows, calendar_pages = _fixture_rows(
-                        fixture_dir,
-                        f"jquants-market-calendar-{cutoff_at.date().isoformat()}",
-                        "data",
-                    )
-                else:
-                    calendar_rows, calendar_pages = _jquants_pages(
-                        base_url=str(jq_config["base_url"]),
-                        path="markets/calendar",
-                        params={
-                            "from": cutoff_at.date().strftime("%Y%m%d"),
-                            "to": calendar_end.strftime("%Y%m%d"),
-                        },
-                        api_key=jq_key,
-                        timeout=timeout,
-                    )
-                _atomic_json(
-                    raw_dir
-                    / f"jquants-market-calendar-{cutoff_at.date().isoformat()}.json",
-                    {"pages": calendar_pages},
-                )
-                normalized_calendar = {
-                    "schema_version": "1.0",
-                    "from": cutoff_at.date().isoformat(),
-                    "to": calendar_end.isoformat(),
-                    "rows": [
-                        {
-                            "date": str(row.get("Date", "")),
-                            "holiday_division": str(
-                                row.get("HolDiv", row.get("HolidayDivision", ""))
-                            ),
-                        }
-                        for row in calendar_rows
-                    ],
-                }
-                _atomic_json(run_dir / "trading-calendar.json", normalized_calendar)
-                source_rows.append(
-                    _query_evidence(
-                        category="jquants_calendar",
-                        provider="jquants_calendar",
-                        scan_date=cutoff_at.date(),
-                        cutoff=cutoff_at,
-                        retrieved_at=started,
-                        count=len(calendar_rows),
-                        url=(
-                            f"{str(jq_config['base_url']).rstrip('/')}/markets/calendar"
-                            f"?from={cutoff_at.date().strftime('%Y%m%d')}"
-                            f"&to={calendar_end.strftime('%Y%m%d')}"
-                        ),
-                    )
-                )
-                record_provider(
-                    "jquants_calendar",
-                    "OK",
-                    len(calendar_pages),
-                    len(calendar_rows),
-                )
-                successful_gap_sources.add("jquants_calendar")
-                calendar_status = "OK"
-            except (KeyError, SourceScanError, ValueError) as error:
-                record_provider(
-                    "jquants_calendar", "ERROR", 0, 0, str(error)
-                )
-                calendar_status = "ERROR"
-
-    td_status = health["providers"].get("jquants_tdnet", {}).get("status")
-    if td_status != "OK":
+    for source, impact, reason in manual_checks:
         gap = _gap(
-            gap_id=f"{run_id}-tdnet",
-            source="tdnet",
-            impact="material timely disclosures could be missing; trade decisions are blocked",
+            gap_id=f"{run_id}-{source}",
+            source=source,
+            impact=impact,
             retry_after=retry_after,
         )
         gaps.append(gap)
         health["blocking_gaps"].append(gap["gap_id"])
-        coverage["official_sources"]["tdnet"]["status"] = "UNAVAILABLE"
         tasks.append(
             _task(
-                task_id=f"manual-tdnet-{run_id}",
+                task_id=f"manual-{source}-{run_id}",
                 task_type="MANUAL_PRIMARY_SOURCE_CHECK",
                 priority="URGENT",
-                reason="J-Quants TDnet endpoint unavailable; verify TDnet manually",
+                reason=reason,
             )
         )
-    if not jq_config.get("daily_bars_enabled"):
-        yahoo, yahoo_error = _yahoo_snapshot(
-            root=root,
-            private=private,
-            cutoff=cutoff_at,
-            config=config,
-            active_targets=_active_target_codes(private),
-        )
-        if yahoo:
-            record_provider(
-                "yahoo_market_data", "OK", 0, int(yahoo.get("received_count", 0))
-            )
-            successful_gap_sources.update({"jquants_market_data", "yahoo_market_data"})
-            source_rows.append(
-                {
-                    "source_id": f"yahoo-price-snapshot-{yahoo.get('price_date')}",
-                    "category": "market_data",
-                    "code": "",
-                    "title": (
-                        "Yahoo Finance PAPER price snapshot "
-                        f"({yahoo.get('received_count', 0)} symbols)"
-                    ),
-                    "published_at_jst": cutoff_at.isoformat(timespec="seconds"),
-                    "retrieved_at_jst": str(yahoo.get("retrieved_at_jst", retrieved)),
-                    "url": "https://finance.yahoo.com/",
-                    "primary_source": "false",
-                    "used_for_decision": "true",
-                    "notes": "unofficial secondary source; checksum-verified PAPER snapshot",
-                }
-            )
-        else:
-            record_provider("yahoo_market_data", "ERROR", 0, 0, yahoo_error)
-    for provider, enabled_key in (
-        ("jquants_financials", "financial_summary_enabled"),
-        ("jquants_market_data", "daily_bars_enabled"),
-    ):
-        if not jq_config.get(enabled_key):
-            continue
-        if health["providers"].get(provider, {}).get("status") != "OK":
-            gap = _gap(
-                gap_id=f"{run_id}-{provider}",
-                source=provider,
-                impact="price or financial inputs are incomplete; new and additional buys are blocked",
-                retry_after=retry_after,
-            )
-            gaps.append(gap)
-            health["blocking_gaps"].append(gap["gap_id"])
-    if (
-        not jq_config.get("daily_bars_enabled")
-        and health["providers"].get("yahoo_market_data", {}).get("status") != "OK"
-    ):
-        gap = _gap(
-            gap_id=f"{run_id}-yahoo_market_data",
-            source="yahoo_market_data",
-            impact="daily prices are incomplete; every price-based decision is blocked",
-            retry_after=retry_after,
-        )
-        gaps.append(gap)
-        health["blocking_gaps"].append(gap["gap_id"])
-    if calendar_status != "OK":
-        gap = _gap(
-            gap_id=f"{run_id}-jquants_calendar",
-            source="jquants_calendar",
-            impact="the next trading date is unconfirmed; order tickets are blocked",
-            retry_after=retry_after,
-        )
-        gaps.append(gap)
-        health["blocking_gaps"].append(gap["gap_id"])
+    record_provider(
+        "first_party_public_checks",
+        "PENDING",
+        0,
+        0,
+        "research evidence is required before decisions can be completed",
+    )
+    coverage["official_sources"]["tdnet"]["status"] = "PENDING"
 
     for code in sorted(targets):
         tasks.append(
