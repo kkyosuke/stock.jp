@@ -1,17 +1,16 @@
 import csv
 import json
 import os
-from pathlib import Path
 import shutil
-from tempfile import TemporaryDirectory
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from scripts.operation_state import (
     PROJECT_ROOT,
     initialize_or_migrate_workspace,
     validate_workspace,
 )
-
 
 LEGACY_PORTFOLIO_HEADER = (
     "as_of_jst,code,company,status,entry_date,average_cost,position_cost_pct,"
@@ -140,9 +139,36 @@ class OperationStateTest(unittest.TestCase):
         self.assertIn("1234: five_x_taken must be boolean", errors)
         self.assertIn("1234: sb_consecutive_quarters must be >= 0", errors)
         self.assertIn("1234: corporate_action_factor must be > 0", errors)
-        self.assertIn(
-            "duplicate trade-event-ledger.csv event_id: event-1", errors
+        self.assertIn("duplicate trade-event-ledger.csv event_id: event-1", errors)
+
+    def test_migrates_legacy_source_config_and_records_its_schema(self) -> None:
+        initialize_or_migrate_workspace(self.root)
+        private = self.root / "operations/private"
+        config_path = private / "source-config.json"
+        legacy = {
+            "schema_version": "1.0",
+            "jquants": {
+                "enabled": True,
+                "daily_bars_enabled": True,
+            },
+        }
+        config_path.write_text(json.dumps(legacy) + "\n", encoding="utf-8")
+
+        result = initialize_or_migrate_workspace(self.root)
+        migrated = json.loads(config_path.read_text(encoding="utf-8"))
+        with (private / "schema-migration-log.csv").open(
+            encoding="utf-8", newline=""
+        ) as source:
+            entries = list(csv.DictReader(source))
+
+        self.assertIn("operations/private/source-config.json", result["migrated"])
+        self.assertEqual(migrated["schema_version"], "1.1")
+        self.assertEqual(
+            migrated["price_source"]["provider"], "yahoo_finance_unofficial"
         )
+        self.assertFalse(migrated["jquants"]["daily_bars_enabled"])
+        self.assertEqual(entries[-1]["from_schema"], "1.0")
+        self.assertEqual(entries[-1]["to_schema"], "1.1")
 
 
 if __name__ == "__main__":

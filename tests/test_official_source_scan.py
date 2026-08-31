@@ -1,17 +1,21 @@
 import csv
 import json
-from pathlib import Path
 import shutil
-from tempfile import TemporaryDirectory
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, patch
 from urllib.error import URLError
 
 from scripts.daily_operation import complete_run, prepare_run
-from scripts.official_source_scan import SOURCE_FIELDS, _append_sources, _request_json, scan_sources
+from scripts.official_source_scan import (
+    SOURCE_FIELDS,
+    _append_sources,
+    _request_json,
+    scan_sources,
+)
 from scripts.operation_backup import create_backup
 from scripts.operation_state import PROJECT_ROOT, initialize_or_migrate_workspace
-
 
 FIXTURES = PROJECT_ROOT / "tests/fixtures/official-source-scan"
 
@@ -281,6 +285,12 @@ class OfficialSourceScanTest(unittest.TestCase):
             "- 情報カットオフ（JST）: 2026-08-31T18:30:00+09:00\n"
             "- 翌営業日: 2026-09-01\n- 対象件数: 1\n- 未解決事項: なし\n\n"
             "## 調査結果\n\n一次資料を確認し、継続保有と判定。\n",
+            encoding="utf-8",
+        )
+        (run_dir / "global-risk.md").write_text(
+            "# 世界情勢・市場リスク確認\n\n- 状態: `COMPLETED`\n"
+            "- 情報カットオフ（JST）: 2026-08-31T18:30:00+09:00\n"
+            "- 判定: `NORMAL`\n\n公的情報を確認済み。\n",
             encoding="utf-8",
         )
         actions_path = run_dir / "next-day-actions.csv"

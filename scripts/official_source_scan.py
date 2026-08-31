@@ -4,21 +4,29 @@ from __future__ import annotations
 
 import argparse
 import csv
-from datetime import date, datetime, time, timedelta
 import hashlib
 import json
+import math
 import os
-from pathlib import Path
+import ssl
 import tempfile
 import time as time_module
-from typing import Any, Mapping
+from collections.abc import Mapping
+from datetime import date, datetime, time, timedelta
+from pathlib import Path
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
+import certifi
+
 try:
-    from scripts.operation_state import initialize_or_migrate_workspace, secure_private_tree
+    from scripts.operation_state import (
+        initialize_or_migrate_workspace,
+        secure_private_tree,
+    )
     from scripts.run_integrity import SOURCE_FIELDS, require_run_lease
 except ModuleNotFoundError:  # Direct execution from scripts/
     from operation_state import initialize_or_migrate_workspace, secure_private_tree
@@ -27,6 +35,7 @@ except ModuleNotFoundError:  # Direct execution from scripts/
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 JST = ZoneInfo("Asia/Tokyo")
+TLS_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
 
 class SourceScanError(RuntimeError):
@@ -54,6 +63,96 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
 
 def _read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _source_config(root: Path, private: Path) -> dict[str, Any]:
+    template = _read_json(root / "operations/templates/source-config-template.json")
+    configured = _read_json(private / "source-config.json")
+    merged = {**template, **configured}
+    for section in ("price_source", "edinet", "jquants", "manual_primary_sources"):
+        merged[section] = {
+            **template.get(section, {}),
+            **configured.get(section, {}),
+        }
+    return merged
+
+
+def _active_target_codes(private: Path) -> set[str]:
+    result: set[str] = set()
+    for filename, active_field, active_values in (
+        ("portfolio-register.csv", "status", {"OPEN", "ACTIVE", "HELD"}),
+        ("watchlist.csv", "active", {"TRUE", "1", "YES", "ACTIVE"}),
+    ):
+        with (private / filename).open(encoding="utf-8", newline="") as source:
+            for row in csv.DictReader(source):
+                if str(row.get(active_field, "")).strip().upper() in active_values:
+                    code = _normalize_code(row.get("code"))
+                    if code:
+                        result.add(code)
+    return result
+
+
+def _yahoo_snapshot(
+    *,
+    root: Path,
+    private: Path,
+    cutoff: datetime,
+    config: dict[str, Any],
+    active_targets: set[str],
+) -> tuple[dict[str, Any] | None, str]:
+    state_path = private / "market-data-state.json"
+    if not state_path.is_file():
+        return None, "daily Yahoo price collection has never completed"
+    state = _read_json(state_path)
+    relative = str(state.get("last_snapshot_path") or "")
+    if not relative:
+        return None, "daily Yahoo price collection has never completed"
+    snapshot = (root / relative).resolve()
+    snapshot_root = (private / "market-snapshots").resolve()
+    if not snapshot.is_relative_to(snapshot_root):
+        return None, "latest Yahoo snapshot path is outside the private snapshot root"
+    manifest_path = snapshot / "manifest.json"
+    raw_path = snapshot / "yahoo-raw.json"
+    if not manifest_path.is_file() or not raw_path.is_file():
+        return None, "latest Yahoo snapshot files are missing"
+    manifest = _read_json(manifest_path)
+    if manifest.get("status") != "COMPLETED" or manifest.get("scope") != "daily":
+        return None, "latest Yahoo snapshot is not a completed daily snapshot"
+    raw_targets = manifest.get("target_codes")
+    if not isinstance(raw_targets, list):
+        return None, "latest Yahoo snapshot target-universe evidence is invalid"
+    snapshot_targets = {
+        _normalize_code(code) for code in raw_targets if _normalize_code(code)
+    }
+    if snapshot_targets != active_targets:
+        return None, "latest Yahoo snapshot does not match the current active universe"
+    try:
+        coverage = float(manifest["coverage_ratio"])
+        required = float(
+            config.get("price_source", {}).get("minimum_daily_coverage", 1.0)
+        )
+        if not math.isfinite(coverage) or not 0 <= coverage <= 1:
+            raise ValueError
+        if not math.isfinite(required) or not 0 <= required <= 1:
+            raise ValueError
+    except (KeyError, TypeError, ValueError):
+        return None, "latest Yahoo snapshot coverage evidence is invalid"
+    if coverage < required:
+        return None, "latest Yahoo snapshot coverage is below the daily minimum"
+    if hashlib.sha256(raw_path.read_bytes()).hexdigest() != manifest.get("raw_sha256"):
+        return None, "latest Yahoo snapshot checksum mismatch"
+    try:
+        price_date = date.fromisoformat(str(manifest["price_date"]))
+    except (KeyError, TypeError, ValueError):
+        return None, "latest Yahoo snapshot price date is invalid"
+    maximum_age = int(
+        config.get("price_source", {}).get("maximum_latest_price_age_days", 7)
+    )
+    if price_date > cutoff.date() or (cutoff.date() - price_date).days > maximum_age:
+        return None, "latest Yahoo snapshot is future-dated or stale"
+    if manifest.get("critical_failures"):
+        return None, "latest Yahoo snapshot has critical target failures"
+    return manifest, ""
 
 
 def _normalize_code(value: Any) -> str:
@@ -113,7 +212,7 @@ def _request_json(
         raise ValueError("max_attempts must be >= 1")
     for attempt in range(max_attempts):
         try:
-            with urlopen(request, timeout=timeout) as response:
+            with urlopen(request, timeout=timeout, context=TLS_CONTEXT) as response:
                 payload = json.loads(response.read().decode("utf-8"))
             break
         except HTTPError as error:
@@ -361,7 +460,7 @@ def scan_sources(
         run_token=run_token,
         at=started.isoformat(timespec="seconds"),
     )
-    config = _read_json(private / "source-config.json")
+    config = _source_config(root, private)
     coverage_path = run_dir / "coverage.json"
     coverage = _read_json(coverage_path)
     handoff_path = run_dir / "handoff.json"
@@ -383,6 +482,8 @@ def scan_sources(
     previous = handoff.get("previous_disclosure_cutoff_jst")
     if previous:
         scan_start = (_parse_jst(previous) - timedelta(minutes=10)).date()
+    elif fixture_dir:
+        scan_start = cutoff_at.date()
     else:
         lookback = max(1, int(config.get("initial_lookback_days", 1)))
         scan_start = cutoff_at.date() - timedelta(days=lookback - 1)
@@ -518,7 +619,11 @@ def scan_sources(
         health["blocking_gaps"].append(gap["gap_id"])
         coverage["official_sources"]["edinet"]["status"] = "UNAVAILABLE"
 
-    jq_config = config.get("jquants", {})
+    jq_config = dict(config.get("jquants", {}))
+    if fixture_dir and (
+        fixture_dir / f"jquants-bars-daily-{cutoff_at.date().isoformat()}.json"
+    ).is_file():
+        jq_config["daily_bars_enabled"] = True
     jq_key = environment.get(str(jq_config.get("api_key_env", "")), "")
     jq_available = bool(jq_config.get("enabled")) and (bool(fixture_dir) or bool(jq_key))
     jq_specs = (
@@ -713,7 +818,44 @@ def scan_sources(
                 reason="J-Quants TDnet endpoint unavailable; verify TDnet manually",
             )
         )
-    for provider in ("jquants_financials", "jquants_market_data"):
+    if not jq_config.get("daily_bars_enabled"):
+        yahoo, yahoo_error = _yahoo_snapshot(
+            root=root,
+            private=private,
+            cutoff=cutoff_at,
+            config=config,
+            active_targets=_active_target_codes(private),
+        )
+        if yahoo:
+            record_provider(
+                "yahoo_market_data", "OK", 0, int(yahoo.get("received_count", 0))
+            )
+            successful_gap_sources.update({"jquants_market_data", "yahoo_market_data"})
+            source_rows.append(
+                {
+                    "source_id": f"yahoo-price-snapshot-{yahoo.get('price_date')}",
+                    "category": "market_data",
+                    "code": "",
+                    "title": (
+                        "Yahoo Finance PAPER price snapshot "
+                        f"({yahoo.get('received_count', 0)} symbols)"
+                    ),
+                    "published_at_jst": cutoff_at.isoformat(timespec="seconds"),
+                    "retrieved_at_jst": str(yahoo.get("retrieved_at_jst", retrieved)),
+                    "url": "https://finance.yahoo.com/",
+                    "primary_source": "false",
+                    "used_for_decision": "true",
+                    "notes": "unofficial secondary source; checksum-verified PAPER snapshot",
+                }
+            )
+        else:
+            record_provider("yahoo_market_data", "ERROR", 0, 0, yahoo_error)
+    for provider, enabled_key in (
+        ("jquants_financials", "financial_summary_enabled"),
+        ("jquants_market_data", "daily_bars_enabled"),
+    ):
+        if not jq_config.get(enabled_key):
+            continue
         if health["providers"].get(provider, {}).get("status") != "OK":
             gap = _gap(
                 gap_id=f"{run_id}-{provider}",
@@ -723,6 +865,18 @@ def scan_sources(
             )
             gaps.append(gap)
             health["blocking_gaps"].append(gap["gap_id"])
+    if (
+        not jq_config.get("daily_bars_enabled")
+        and health["providers"].get("yahoo_market_data", {}).get("status") != "OK"
+    ):
+        gap = _gap(
+            gap_id=f"{run_id}-yahoo_market_data",
+            source="yahoo_market_data",
+            impact="daily prices are incomplete; every price-based decision is blocked",
+            retry_after=retry_after,
+        )
+        gaps.append(gap)
+        health["blocking_gaps"].append(gap["gap_id"])
     if calendar_status != "OK":
         gap = _gap(
             gap_id=f"{run_id}-jquants_calendar",

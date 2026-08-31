@@ -1,17 +1,16 @@
 import csv
-from datetime import date
+import hashlib
 import json
-from pathlib import Path
 import shutil
-from tempfile import TemporaryDirectory
 import unittest
+from datetime import date
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from scripts.nightly_artifacts import next_trading_date, validate_nightly_artifacts
 from scripts.nightly_operation import finalize_nightly_run, start_nightly_run
-from scripts.operation_backup import create_backup
 from scripts.operation_state import PROJECT_ROOT, initialize_or_migrate_workspace
 from scripts.order_ticket import propose_order
-
 
 FIXTURES = PROJECT_ROOT / "tests/fixtures/official-source-scan"
 
@@ -39,6 +38,48 @@ class NightlyOperationTest(unittest.TestCase):
             csv.DictWriter(destination, fieldnames=fields).writerow(row)
 
     def _start(self) -> dict[str, object]:
+        private = self.root / "operations/private"
+        targets: set[str] = set()
+        for filename, field, statuses in (
+            ("portfolio-register.csv", "status", {"OPEN", "ACTIVE", "HELD"}),
+            ("watchlist.csv", "active", {"TRUE", "1", "YES", "ACTIVE"}),
+        ):
+            with (private / filename).open(encoding="utf-8", newline="") as source:
+                for row in csv.DictReader(source):
+                    if str(row.get(field, "")).strip().upper() in statuses:
+                        targets.add(str(row.get("code", "")).strip())
+        snapshot = private / "market-snapshots/2026-08-31/daily/180000"
+        snapshot.mkdir(parents=True)
+        raw = snapshot / "yahoo-raw.json"
+        raw.write_text('{"batches": []}\n', encoding="utf-8")
+        (snapshot / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "status": "COMPLETED",
+                    "scope": "daily",
+                    "price_date": "2026-08-31",
+                    "target_codes": sorted(targets),
+                    "coverage_ratio": 1.0,
+                    "critical_failures": [],
+                    "raw_sha256": hashlib.sha256(raw.read_bytes()).hexdigest(),
+                }
+            ),
+            encoding="utf-8",
+        )
+        market_state_path = private / "market-data-state.json"
+        market_state = json.loads(market_state_path.read_text(encoding="utf-8"))
+        market_state["last_snapshot_path"] = snapshot.relative_to(self.root).as_posix()
+        market_state_path.write_text(json.dumps(market_state), encoding="utf-8")
+        state_path = private / "state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["last_backup_at_jst"] = "2026-07-31T18:00:00+09:00"
+        backup = private / "backups/operation-test.zip"
+        backup.parent.mkdir()
+        backup.write_bytes(b"verified test backup")
+        state["last_backup_path"] = backup.relative_to(self.root).as_posix()
+        state["last_backup_sha256"] = hashlib.sha256(backup.read_bytes()).hexdigest()
+        state["last_backup_verified_before_encryption"] = True
+        state_path.write_text(json.dumps(state), encoding="utf-8")
         return start_nightly_run(
             at="2026-08-31T18:45:00+09:00",
             cutoff="2026-08-31T18:30:00+09:00",
@@ -67,6 +108,8 @@ class NightlyOperationTest(unittest.TestCase):
             actions = list(csv.DictReader(source))
 
         self.assertEqual(result["source_scan_status"], "COMPLETED")
+        self.assertTrue(result["paper_go"])
+        self.assertFalse(result["live_go"])
         self.assertTrue(result["trading_calendar_confirmed"])
         self.assertEqual(result["next_trading_date"], "2026-09-01")
         self.assertIn("2026-08-31-daily-event", result["due_task_ids"])
@@ -288,6 +331,7 @@ class NightlyOperationTest(unittest.TestCase):
         self.assertTrue(any("requires a matching order ticket" in error for error in errors))
 
     def test_honest_uncertainty_text_is_not_treated_as_a_template_marker(self) -> None:
+        self._add_holding()
         started = self._start()
         run_dir = self.root / str(started["run_dir"])
         (run_dir / "research-results.md").write_text(
@@ -295,6 +339,12 @@ class NightlyOperationTest(unittest.TestCase):
             "- 情報カットオフ（JST）: 2026-08-31T18:30:00+09:00\n"
             "- 翌営業日: 2026-09-01\n- 対象件数: 0\n"
             "- 未解決事項: なし\n\n将来の影響は未確定であり、追加確認する。\n",
+            encoding="utf-8",
+        )
+        (run_dir / "global-risk.md").write_text(
+            "# 世界情勢・市場リスク確認\n\n- 状態: `COMPLETED`\n"
+            "- 情報カットオフ（JST）: 2026-08-31T18:30:00+09:00\n"
+            "- 判定: `NORMAL`\n\n公的情報を確認済み。\n",
             encoding="utf-8",
         )
 
@@ -309,6 +359,7 @@ class NightlyOperationTest(unittest.TestCase):
         self.assertFalse(any("unresolved marker: 未確定" in error for error in errors))
 
     def test_completed_backup_task_requires_an_existing_private_archive(self) -> None:
+        self._add_holding()
         started = self._start()
         run_dir = self.root / str(started["run_dir"])
         plan_path = run_dir / "work-plan.json"
@@ -333,79 +384,15 @@ class NightlyOperationTest(unittest.TestCase):
 
         self.assertTrue(any("archive does not exist" in error for error in errors))
 
-    def test_empty_universe_can_finalize_and_wait_until_next_night(self) -> None:
-        started = self._start()
-        run_dir = self.root / str(started["run_dir"])
-        with (run_dir / "sources.csv").open("a", encoding="utf-8", newline="") as destination:
-            csv.writer(destination).writerow(
-                [
-                    "manual-jpx", "jpx", "", "JPX notices checked",
-                    "2026-08-31T18:20:00+09:00", "2026-08-31T18:50:00+09:00",
-                    "https://www.jpx.co.jp/", "true", "true", "manual check",
-                ]
-            )
-        self._complete_research_queue(run_dir)
-        coverage_path = run_dir / "coverage.json"
-        coverage = json.loads(coverage_path.read_text(encoding="utf-8"))
-        coverage["status"] = "COMPLETED"
-        coverage["source_window"]["through_inclusive_jst"] = "2026-08-31T18:30:00+09:00"
-        for item in coverage["universe"].values():
-            item["checked"] = list(item["expected"])
-        coverage["official_sources"]["company_ir"]["status"] = "NOT_APPLICABLE"
-        coverage["official_sources"]["jpx"]["status"] = "CHECKED"
-        coverage["completed_at_jst"] = "2026-08-31T19:05:00+09:00"
-        coverage_path.write_text(
-            json.dumps(coverage, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    def test_empty_universe_is_blocked_before_run_creation(self) -> None:
+        with self.assertRaisesRegex(PermissionError, "daily universe is empty"):
+            self._start()
+        self.assertFalse(
+            (self.root / "operations/private/runs/2026-08-31").exists()
         )
-        plan_path = run_dir / "work-plan.json"
-        plan = json.loads(plan_path.read_text(encoding="utf-8"))
-        plan["status"] = "COMPLETED"
-        backup = create_backup(
-            at="2026-08-31T18:55:00+09:00",
-            allow_plaintext=True,
-            root=self.root,
-        )
-        for task in plan["tasks"]:
-            task["status"] = "COMPLETED"
-            task["evidence_source_ids"] = (
-                [f"internal:backup:{backup['archive']}"]
-                if task.get("task_type") == "operations_backup"
-                else ["manual-jpx"]
-            )
-        plan_path.write_text(
-            json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-        )
-        (run_dir / "research-results.md").write_text(
-            "# 夜間調査結果 2026-08-31\n\n- 状態: `COMPLETED`\n"
-            "- 情報カットオフ（JST）: 2026-08-31T18:30:00+09:00\n"
-            "- 翌営業日: 2026-09-01\n- 対象件数: 0\n- 未解決事項: なし\n\n"
-            "## 調査結果\n\n対象なし。公式情報源の疎通を確認。\n",
-            encoding="utf-8",
-        )
-        report_path = run_dir / "report.md"
-        report = report_path.read_text(encoding="utf-8")
-        report = (
-            report.replace("- 実行状態: `IN-PROGRESS`", "- 実行状態: `COMPLETED`")
-            .replace("- 今回の開示カットオフ（JST）: 未確定", "- 今回の開示カットオフ（JST）: 2026-08-31T18:30:00+09:00")
-            .replace("- 株価基準日: 未確定", "- 株価基準日: 2026-08-31")
-            .replace("- 総合結果: 未確定", "- 総合結果: 対象なし、情報源確認完了")
-        )
-        report_path.write_text(report, encoding="utf-8")
-
-        result = finalize_nightly_run(
-            run_id="2026-08-31",
-            run_token=str(started["run_token"]),
-            completed_at="2026-08-31T19:05:00+09:00",
-            source_cutoff="2026-08-31T18:30:00+09:00",
-            price_date="2026-08-31",
-            summary="対象なし。翌夜まで待機",
-            root=self.root,
-        )
-        self.assertEqual(result["status"], "completed")
-        self.assertEqual(result["next_run_at_jst"], "2026-09-01T18:30:00+09:00")
-        self.assertIn("次回夜間実行まで待機", result["wait_instruction"])
 
     def test_failed_finalize_restores_next_run_handoff(self) -> None:
+        self._add_holding()
         started = self._start()
         run_dir = self.root / str(started["run_dir"])
         handoff_path = run_dir / "handoff.json"

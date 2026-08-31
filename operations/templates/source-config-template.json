@@ -1,14 +1,35 @@
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "request_timeout_seconds": 30,
-  "initial_lookback_days": 1,
+  "initial_lookback_days": 7,
+  "paper_manual_primary_source_fallback": true,
+  "price_source": {
+    "enabled": true,
+    "provider": "yahoo_finance_unofficial",
+    "base_urls": [
+      "https://query2.finance.yahoo.com",
+      "https://query1.finance.yahoo.com"
+    ],
+    "daily_universe_mode": "active_targets",
+    "monthly_universe_mode": "all_jpx",
+    "jpx_list_url": "https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xls",
+    "daily_range": "3mo",
+    "monthly_range": "1y",
+    "market_calendar_symbol": "^N225",
+    "interval": "1d",
+    "batch_size": 10,
+    "max_attempts": 3,
+    "minimum_daily_coverage": 1.0,
+    "minimum_full_universe_coverage": 0.99,
+    "maximum_latest_price_age_days": 7
+  },
   "jquants": {
     "enabled": true,
     "base_url": "https://api.jquants.com/v2",
     "api_key_env": "JQUANTS_API_KEY",
     "tdnet_enabled": true,
     "financial_summary_enabled": true,
-    "daily_bars_enabled": true,
+    "daily_bars_enabled": false,
     "market_calendar_enabled": true
   },
   "edinet": {

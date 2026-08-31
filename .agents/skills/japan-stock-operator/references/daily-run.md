@@ -5,10 +5,11 @@ Use this workflow when the request is “today's run,” a scheduled operation, 
 ## Start or resume once at night
 
 1. Read `docs/nightly-operation-v0.1.md`, `docs/daily-automation-runbook-v0.1.md`, `operations/private/operation-policy.json`, and the canonical rule files named in `SKILL.md`.
-2. Run `scripts/nightly_operation.py start --at <current aware JST timestamp> --cutoff <declared JST cutoff>` and retain the returned `run_token`. This validates state, prepares or resumes the run, scans official APIs, confirms the next trading date, and creates due work. If it returns `locked`, do not start a second run.
-3. Read `provider-health.json`, `research-queue.json`, `work-plan.json`, `coverage.json`, `operations/private/state.json`, the previous run's `handoff.json` when present, `portfolio-register.csv`, `watchlist.csv`, and the trade, recovered-capital, cash, corporate-action, rebuy-restriction, and industry-exposure ledgers.
-4. If the returned run status is already `completed`, report that the date was already closed. Do not create duplicate orders.
-5. If it is `in_progress`, resume the existing files rather than replacing them.
+2. Confirm that the scheduled daily Yahoo snapshot is `COMPLETED`, checksum-valid, fresh, and covers exactly the current holdings plus active watchlist. Run `scripts/operation_bootstrap.py check`; stop on every blocker. Do not reuse a snapshot after the active universe changes.
+3. Run `scripts/nightly_operation.py start --at <current aware JST timestamp> --cutoff <declared JST cutoff>` and retain the returned `run_token`. The entry point repeats the readiness check, validates state, prepares or resumes the run, scans official APIs, confirms the next trading date, and creates due work. If it returns `locked`, do not start a second run.
+4. Read `provider-health.json`, `research-queue.json`, `work-plan.json`, `coverage.json`, `operations/private/state.json`, the previous run's `handoff.json` when present, `portfolio-register.csv`, `watchlist.csv`, and the trade, recovered-capital, cash, corporate-action, rebuy-restriction, and industry-exposure ledgers.
+5. If the returned run status is already `completed`, report that the date was already closed. Do not create duplicate orders.
+6. If it is `in_progress`, resume the existing files rather than replacing them.
 
 ## Cover the required universe
 
@@ -22,7 +23,7 @@ Include other modes only when due:
 
 - Daily event checks on every run
 - Weekly checks on Friday or when a missed weekly review is queued
-- Monthly checks after the final trading session's values are available or when queued
+- Monthly checks after the final trading session's values are available or when queued. First run `scripts/yahoo_price_collector.py collect --scope monthly`; require a completed 99%+ JPX-universe snapshot and record its private path as evidence before reviewing or promoting candidates
 - Quarterly checks when a new quarterly disclosure starts the five-trading-day review window
 - Full-year checks when a new full-year disclosure starts the ten-trading-day review window
 

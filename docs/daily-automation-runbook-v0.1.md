@@ -7,9 +7,9 @@
 
 ## 1. 結論
 
-ChatGPTデスクトップの同じチャットに、ローカルプロジェクトを対象とする定時タスクを1つだけ作る。平日18:30に `$japan-stock-operator` を明示して実行すれば、前回からの差分確認、期限が来た週次・月次・四半期レビュー、全対象の翌営業日アクション、注文候補、ログ保存、次回への引き継ぎを1回にまとめられる。具体的な正規フローは[夜間ワンショット運用 v0.1](nightly-operation-v0.1.md)に従う。
+平日18:00に非AIのYahoo株価collectorを先に動かす。その後、利用者が同じチャットのローカルプロジェクトへ `$japan-stock-operator` を明示して1回依頼すれば、保存済み株価の検証、公式情報源、世界情勢、期限が来たレビュー、明日のアクション、今日のログ保存をまとめて実行できる。株価範囲は[Yahoo株価収集・監視範囲 v0.1](market-data-operation-v0.1.md)、判断フローは[夜間ワンショット運用 v0.1](nightly-operation-v0.1.md)に従う。
 
-日次タスクが行うのは情報収集、ルール判定、注文案の作成までである。証券会社への注文送信は行わない。`PAPER`では注文票を `PAPER_PROPOSED` とし、実際には入力しない。`LIVE`昇格後だけ、利用者が翌営業日8:45〜8:55に約10分の注文前チェックを行い、承認した注文を手入力する。18:30以後に重要開示、売買停止、取引所・証券会社障害が発生し得るため、この確認は省略しない。
+日次タスクが行うのは情報収集、ルール判定、注文案の作成までである。証券会社への注文送信は行わない。`PAPER`では注文票を `PAPER_PROPOSED` とし、実際には入力しない。現行v0.2の`LIVE`は翌営業日8:45〜8:55の注文前チェックを要求するため、その時間を確保できない利用者は`LIVE`へ昇格しない。注文時刻を柔軟にする案は凍結済みv0.2を直接変えず、別版で前向きPAPER検証する。
 
 ## 2. 最も楽にするための設計
 
@@ -42,6 +42,7 @@ ChatGPTデスクトップの同じチャットに、ローカルプロジェク�
 | `runs/YYYY-MM-DD/research-queue.json` | 当夜に読む一次資料と手動確認のキュー | 日次タスク |
 | `runs/YYYY-MM-DD/work-plan.json` | 当夜の期限到来タスクと完了状態 | 日次タスク |
 | `runs/YYYY-MM-DD/research-results.md` | 当夜の調査結果 | 日次タスク |
+| `runs/YYYY-MM-DD/global-risk.md` | 世界情勢の事実、KPIへの伝播、判断 | 日次タスク |
 | `runs/YYYY-MM-DD/next-day-actions.csv` | 全対象の翌営業日アクション | 日次タスク |
 | `runs/YYYY-MM-DD/raw-sources/` | APIの生レスポンス。private限定 | 日次タスク |
 | `runs/YYYY-MM-DD/handoff.json` | 実行状態と次回キュー | 日次タスク |
@@ -67,18 +68,20 @@ ChatGPTデスクトップの同じチャットに、ローカルプロジェク�
 ~~~bash
 .venv/bin/python scripts/daily_operation.py init
 .venv/bin/python scripts/operation_state.py validate
+.venv/bin/python scripts/render_price_schedule.py
 .venv/bin/python scripts/operation_bootstrap.py check
 .venv/bin/python scripts/operation_smoke.py --days 20 --start-date 2026-09-01
 ~~~
 
-次に、次の2ファイルへ対象を登録する。
-
-1. `operations/private/portfolio-register.csv`: 現在の保有銘柄。未保有ならヘッダーだけでよい
-2. `operations/private/watchlist.csv`: 監視する候補。最初は手動で選んだ少数から始めてよい
+最初に`.venv/bin/python scripts/yahoo_price_collector.py collect --scope monthly`を実行する。利用者が全銘柄を手入力する必要はない。月次scanの`monthly-price-screen.csv`から、AIが一次資料と長期条件を確認した銘柄だけ`watchlist.csv`へ登録する。現在の保有がある場合だけ`portfolio-register.csv`へ正確に登録する。
 
 その後、下記の定時タスク用プロンプトをチャットで1回手動実行し、対象件数、根拠URL、注文候補、引き継ぎが期待どおりか確認する。最初の数回は必ず結果をレビューする。
 
-## 4. 定時タスクの設定
+## 4. 株価の定時収集とAIの一回指示
+
+`.venv/bin/python scripts/render_price_schedule.py`で、現在の永続checkoutへの絶対pathを持つlaunchd定義を生成する。PRをマージした永続checkoutで生成したファイルを`~/Library/LaunchAgents/`へコピーし、`launchctl`で登録する。セッション用worktreeのpathは登録しない。平日18:00に保有＋関心中の株価を100%取得し、失敗ログも`operations/private/`へ残す。
+
+AIは利用者の一回指示で起動する。リマインダー用途でScheduled taskを使う場合は次の条件にする。
 
 [OpenAIのScheduled tasks公式手順](https://learn.chatgpt.com/docs/automations)に従い、次の設定で作成する。
 
@@ -98,22 +101,23 @@ ChatGPTデスクトップの同じチャットに、ローカルプロジェク�
 $japan-stock-operator を使って、今日の夜間運用を最後まで実行してください。
 ~~~
 
-スキルは`nightly_operation.py start`から開始し、全調査・全対象アクション・必要な注文票を保存して`finalize`する。成功後は次の夜まで待機する。証券会社への注文送信は行わない。
+スキルは日次Yahoo snapshotの`COMPLETED`とchecksumを確認してから`nightly_operation.py start`へ進み、全調査・世界情勢・全対象アクション・必要な注文票を保存して`finalize`する。成功後は次の夜まで待機する。証券会社への注文送信は行わない。
 
 ## 5. 1回の実行フロー
 
-1. `nightly_operation.py start` を実行し、返された`run_token`を保持する。同日の実行が`locked`なら別実行を開始しない
+1. 保存済みYahoo日足の対象集合・鮮度・checksumとバックアップを`operation_bootstrap.py check`で検証し、blockerがあれば開始しない
 2. `operation-policy.json`、`state.json`、保有、取引・資金台帳、再購入禁止、監視、未処理注文、前回引き継ぎを読み、`operation_state.py validate`を通す
 3. 今回のJST情報カットオフを宣言する
-4. `official_source_scan.py`でTDnet、EDINET、決算サマリー、日足を差分取得し、生成されたキューで会社IRとJPXを確認する
-5. `S-A`を最優先し、注文候補に新情報があれば `WAIT` または取消候補にする
-6. 期限到来キューだけ週次・月次・四半期・本決算レビューする
-7. 判断根拠を `sources.csv` と日次レポートへ記録し、`coverage.json`の確認済み対象を更新する
-8. 売買判断または期限到来レビューだけ個別判断ログを作る
-9. 全対象の翌営業日アクションを`next-day-actions.csv`へ記録し、売買なら`order_ticket.py propose`で、`PAPER`は`PAPER_PROPOSED`、昇格済み`LIVE`は`PROPOSED`の注文票を設定する
-10. `handoff.json` の未完了レビュー、未処理注文、データ不足、次回日時を更新する
-11. 全必須対象を確認できた場合だけ `nightly_operation.py finalize` で状態を進め、次の夜まで待機する
-12. 重要な取得失敗があれば `fail` とし、次回は前回成功時のカットオフから再確認する
+4. `nightly_operation.py start`を実行し、返された`run_token`を保持する。開始処理もreadinessを再検証し、同日の実行が`locked`なら別実行を開始しない。公式情報源はTDnet、EDINET、決算サマリーを差分取得し、APIキーがないPAPERでは会社IR、TDnet/JPX、EDINETをWebで確認して根拠を保存する
+5. `global-risk.md`へ為替、金利、資源、主要国政策、地政学を「事実→保有KPIへの伝播→判断」に分けて保存する
+6. `S-A`を最優先し、注文候補に新情報があれば `WAIT` または取消候補にする
+7. 期限到来キューだけ週次・月次・四半期・本決算レビューする。月次は`collect --scope monthly`で全JPXを再取得する
+8. 判断根拠を `sources.csv` と日次レポートへ記録し、`coverage.json`の確認済み対象を更新する
+9. 売買判断または期限到来レビューだけ個別判断ログを作る
+10. 全対象の翌営業日アクションを`next-day-actions.csv`へ記録し、売買なら`order_ticket.py propose`で、`PAPER`は`PAPER_PROPOSED`、昇格済み`LIVE`は`PROPOSED`の注文票を設定する
+11. `handoff.json` の未完了レビュー、未処理注文、データ不足、次回日時を更新する
+12. 全必須対象を確認できた場合だけ `nightly_operation.py finalize` で状態を進め、次の夜まで待機する
+13. 重要な取得失敗があれば `fail` とし、次回は前回成功時のカットオフから再確認する
 
 土日・祝日明けも前回成功時からの差分を見るため、休日中の開示を取りこぼさない。平日の非取引日や価格未更新日は無理に売買判断を作らず、開示確認だけを行って価格基準日を明記する。
 
@@ -157,7 +161,7 @@ $japan-stock-operator を使って、今日の夜間運用を最後まで実行�
 
 ## 7. 注文日の最小作業
 
-注文候補が0件なら、利用者の作業は日次レポートの確認だけである。候補がある場合は、翌営業日8:45〜8:55に次だけ行う。
+注文候補が0件なら、利用者の作業は日次レポートの確認だけである。`PAPER`では候補があっても証券会社へ入力しない。将来`LIVE`へ昇格するには、翌営業日8:45〜8:55に次を実行できることが現行v0.2の条件である。
 
 1. `pretrade-check.md` を開く
 2. 前回カットオフ後の重要開示、売買停止、分割、気配、障害を確認する
@@ -165,7 +169,7 @@ $japan-stock-operator を使って、今日の夜間運用を最後まで実行�
 4. `SUBMIT` だけ証券会社へ当日限りの指値で手入力する
 5. 約定後に `orders.csv` の約定数量・価格・費用と `portfolio-register.csv` を更新する
 
-成行化、午後の指値引き上げ、未承認注文の追加はしない。予定が変わった場合は「何もしない」を安全側の既定値とする。
+成行化、午後の指値引き上げ、未承認注文の追加はしない。この時間を確保できない日、またはピンポイント注文を常態的にできない場合は「何もしない」を安全側の既定値とし、現行v0.2のLIVEは`NO-GO`とする。
 
 ## 8. 定期レビュー
 

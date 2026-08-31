@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import csv
-from datetime import date, datetime, timedelta
 import json
-from pathlib import Path
 import tempfile
+from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 JST = ZoneInfo("Asia/Tokyo")
@@ -158,7 +157,14 @@ def build_due_tasks(
     current = _parse_jst(at)
     due_at = current.replace(hour=23, minute=59, second=59).isoformat(timespec="seconds")
     tasks = [
-        _task(f"{run_id}-daily-event", "daily_event", "HIGH", "毎日の開示・即時撤退条件確認", due_at)
+        _task(f"{run_id}-daily-event", "daily_event", "HIGH", "毎日の開示・即時撤退条件確認", due_at),
+        _task(
+            f"{run_id}-global-risk",
+            "global_risk",
+            "HIGH",
+            "為替・金利・資源・主要国政策・地政学を事実→KPI伝播→判断に分けて保存",
+            due_at,
+        ),
     ]
     backup_due = not last_backup_at
     if last_backup_at:
@@ -192,7 +198,15 @@ def build_due_tasks(
     if next_trade_date:
         following = date.fromisoformat(next_trade_date)
         if following.month != current.date().month:
-            tasks.append(_task(f"{run_id}-monthly", "monthly", "NORMAL", "月末後の月次判定", due_at))
+            tasks.append(
+                _task(
+                    f"{run_id}-monthly",
+                    "monthly",
+                    "NORMAL",
+                    "Yahoo月次全JPX価格スキャン後の候補集合・市場レジーム見直し",
+                    due_at,
+                )
+            )
             if current.month in {3, 6, 9, 12}:
                 tasks.append(
                     _task(f"{run_id}-quarterly-performance", "quarterly_performance", "NORMAL", "四半期運用成績確認", due_at)
@@ -318,6 +332,15 @@ def create_nightly_artifacts(
         text = (root / "operations/templates/research-results-template.md").read_text(encoding="utf-8")
         research_path.write_text(text.replace("{{RUN_ID}}", run_id), encoding="utf-8")
 
+    global_risk_path = run_dir / "global-risk.md"
+    if not global_risk_path.is_file():
+        global_risk_path.write_text(
+            (root / "operations/templates/global-risk-template.md").read_text(
+                encoding="utf-8"
+            ),
+            encoding="utf-8",
+        )
+
     actions_path = run_dir / "next-day-actions.csv"
     if not actions_path.is_file():
         private = root / "operations/private"
@@ -380,6 +403,7 @@ def create_nightly_artifacts(
     return {
         "work_plan": plan_path.relative_to(root).as_posix(),
         "research_results": research_path.relative_to(root).as_posix(),
+        "global_risk": global_risk_path.relative_to(root).as_posix(),
         "next_day_actions": actions_path.relative_to(root).as_posix(),
         "next_trading_date": plan.get("next_trading_date"),
         "trading_calendar_confirmed": plan.get("trading_calendar_confirmed") is True,
@@ -499,6 +523,16 @@ def validate_nightly_artifacts(
     ):
         if marker in research:
             errors.append(f"research results contains unresolved marker: {marker}")
+
+    global_risk_path = run_dir / "global-risk.md"
+    if not global_risk_path.is_file():
+        errors.append("global risk artifact is missing")
+    else:
+        global_risk = global_risk_path.read_text(encoding="utf-8")
+        if "- 状態: `COMPLETED`" not in global_risk:
+            errors.append("global risk status must be COMPLETED")
+        if "- 情報カットオフ（JST）: 未確定" in global_risk:
+            errors.append("global risk cutoff must be resolved")
 
     fields, actions = _read_csv(run_dir / "next-day-actions.csv")
     if fields != ACTION_FIELDS:

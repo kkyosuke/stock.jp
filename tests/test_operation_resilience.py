@@ -1,8 +1,10 @@
+import csv
+import hashlib
 import json
-from pathlib import Path
 import shutil
-from tempfile import TemporaryDirectory
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from scripts.daily_operation import prepare_run
 from scripts.operation_backup import create_backup, stage_restore, verify_backup
@@ -10,7 +12,6 @@ from scripts.operation_bootstrap import check_readiness
 from scripts.operation_smoke import simulate_operations
 from scripts.operation_state import PROJECT_ROOT, initialize_or_migrate_workspace
 from scripts.operation_watchdog import watchdog_status
-
 
 FIXTURES = PROJECT_ROOT / "tests/fixtures/official-source-scan"
 
@@ -88,19 +89,91 @@ class OperationResilienceTest(unittest.TestCase):
         self.assertEqual(stale["status"], "STALE_RUN")
         self.assertEqual(stale["stale_runs"], ["2026-09-01"])
 
-    def test_bootstrap_blocks_missing_credentials_and_fixture_mode_is_ready(self) -> None:
+    def test_bootstrap_separates_paper_safety_from_official_api_automation(self) -> None:
         blocked = check_readiness(root=self.root, environ={})
-        ready = check_readiness(root=self.root, environ={}, fixture_dir=FIXTURES)
+        fixture = check_readiness(root=self.root, environ={}, fixture_dir=FIXTURES)
         nonexistent_fixture = check_readiness(
             root=self.root,
             environ={},
             fixture_dir=self.root / "does-not-exist",
         )
         self.assertFalse(blocked["ready"])
-        self.assertTrue(any("JQUANTS_API_KEY" in item for item in blocked["blockers"]))
-        self.assertTrue(ready["ready"])
+        self.assertTrue(
+            any("JQUANTS_API_KEY" in item for item in blocked["automatic_source_blockers"])
+        )
+        self.assertFalse(fixture["ready"])
         self.assertFalse(nonexistent_fixture["ready"])
-        self.assertEqual(ready["broker_submission"], "HUMAN_ONLY")
+        self.assertEqual(fixture["broker_submission"], "HUMAN_ONLY")
+
+    def test_paper_go_requires_target_backup_and_verified_daily_price_snapshot(self) -> None:
+        portfolio = self.root / "operations/private/portfolio-register.csv"
+        with portfolio.open(encoding="utf-8", newline="") as source:
+            fields = next(csv.reader(source))
+        row = dict.fromkeys(fields, "")
+        row.update({"code": "1234", "company": "Example", "status": "OPEN"})
+        with portfolio.open("a", encoding="utf-8", newline="") as destination:
+            csv.DictWriter(destination, fieldnames=fields).writerow(row)
+        create_backup(
+            at="2026-09-01T17:00:00+09:00", allow_plaintext=True, root=self.root
+        )
+        snapshot = self.root / "operations/private/market-snapshots/2026-09-01/daily"
+        snapshot.mkdir(parents=True)
+        raw = snapshot / "yahoo-raw.json"
+        raw.write_text('{"batches": []}\n', encoding="utf-8")
+        manifest = {
+            "status": "COMPLETED",
+            "scope": "daily",
+            "price_date": "2026-09-01",
+            "target_codes": ["1234"],
+            "coverage_ratio": 1.0,
+            "critical_failures": [],
+            "raw_sha256": hashlib.sha256(raw.read_bytes()).hexdigest(),
+        }
+        (snapshot / "manifest.json").write_text(
+            json.dumps(manifest), encoding="utf-8"
+        )
+        state_path = self.root / "operations/private/market-data-state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["last_snapshot_path"] = snapshot.relative_to(self.root).as_posix()
+        state["last_success_at_jst"] = "2026-09-01T18:00:00+09:00"
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+
+        result = check_readiness(
+            root=self.root, environ={}, at="2026-09-01T18:30:00+09:00"
+        )
+
+        self.assertTrue(result["paper_go"])
+        self.assertTrue(result["ready"])
+        self.assertFalse(result["live_go"])
+
+        operation_state_path = self.root / "operations/private/state.json"
+        operation_state = json.loads(operation_state_path.read_text(encoding="utf-8"))
+        (self.root / operation_state["last_backup_path"]).unlink()
+        missing_backup = check_readiness(
+            root=self.root, environ={}, at="2026-09-01T18:30:00+09:00"
+        )
+        self.assertFalse(missing_backup["paper_go"])
+        self.assertIn(
+            "latest verified operation backup archive is missing",
+            missing_backup["paper_blockers"],
+        )
+
+        manifest["target_codes"] = ["1234", "5678"]
+        (snapshot / "manifest.json").write_text(
+            json.dumps(manifest), encoding="utf-8"
+        )
+        changed = check_readiness(
+            root=self.root, environ={}, at="2026-09-01T18:30:00+09:00"
+        )
+        self.assertFalse(changed["paper_go"])
+        self.assertIn(
+            "latest Yahoo snapshot does not match the current active universe",
+            changed["paper_blockers"],
+        )
+
+    def test_bootstrap_rejects_naive_reference_time(self) -> None:
+        with self.assertRaisesRegex(ValueError, "UTC offset"):
+            check_readiness(root=self.root, environ={}, at="2026-09-01T18:30:00")
 
     def test_twenty_day_smoke_finishes_without_broker_submission(self) -> None:
         result = simulate_operations(

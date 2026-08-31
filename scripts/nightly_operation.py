@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timedelta
 import json
-from pathlib import Path
 import tempfile
+from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -14,12 +14,17 @@ try:
     from scripts.daily_operation import complete_run, fail_run, prepare_run, read_status
     from scripts.nightly_artifacts import create_nightly_artifacts
     from scripts.official_source_scan import scan_sources
-    from scripts.operation_state import initialize_or_migrate_workspace, validate_workspace
+    from scripts.operation_bootstrap import check_readiness
+    from scripts.operation_state import (
+        initialize_or_migrate_workspace,
+        validate_workspace,
+    )
     from scripts.operation_watchdog import watchdog_status
 except ModuleNotFoundError:  # Direct execution from scripts/
     from daily_operation import complete_run, fail_run, prepare_run, read_status
     from nightly_artifacts import create_nightly_artifacts
     from official_source_scan import scan_sources
+    from operation_bootstrap import check_readiness
     from operation_state import initialize_or_migrate_workspace, validate_workspace
     from operation_watchdog import watchdog_status
 
@@ -68,6 +73,11 @@ def start_nightly_run(
     root: Path = PROJECT_ROOT,
 ) -> dict[str, Any]:
     initialize_or_migrate_workspace(root)
+    readiness = check_readiness(root=root, fixture_dir=fixture_dir, at=at)
+    if not readiness["ready"]:
+        raise PermissionError(
+            "nightly operation readiness blocked: " + "; ".join(readiness["blockers"])
+        )
     watchdog = watchdog_status(at=at, root=root)
     errors = validate_workspace(root)
     if errors:
@@ -89,6 +99,9 @@ def start_nightly_run(
     )
     return {
         **prepared,
+        "readiness_status": readiness["status"],
+        "paper_go": readiness["paper_go"],
+        "live_go": readiness["live_go"],
         "watchdog_before_start": watchdog,
         "source_scan_status": scan["status"],
         "blocking_gap_count": scan["blocking_gap_count"],

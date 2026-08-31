@@ -19,5 +19,8 @@
     "quarterly_performance": null,
     "annual_promotion": null
   },
-  "last_backup_at_jst": null
+  "last_backup_at_jst": null,
+  "last_backup_path": null,
+  "last_backup_sha256": null,
+  "last_backup_verified_before_encryption": false
 }
