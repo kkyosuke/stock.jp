@@ -38,6 +38,9 @@ ChatGPTデスクトップの同じチャットに、ローカルプロジェク�
 | `runs/YYYY-MM-DD/sources.csv` | 公開・取得日時付きの根拠URL | 日次タスク |
 | `runs/YYYY-MM-DD/coverage.json` | 開始時の対象と、銘柄・情報源ごとの確認完了 | 日次タスク |
 | `runs/YYYY-MM-DD/lease.json` | 同時実行を防ぐ6時間のrun token | 日次タスク |
+| `runs/YYYY-MM-DD/provider-health.json` | 公式APIごとの成功・不足・取得件数 | 日次タスク |
+| `runs/YYYY-MM-DD/research-queue.json` | 当夜に読む一次資料と手動確認のキュー | 日次タスク |
+| `runs/YYYY-MM-DD/raw-sources/` | APIの生レスポンス。private限定 | 日次タスク |
 | `runs/YYYY-MM-DD/handoff.json` | 実行状態と次回キュー | 日次タスク |
 | `runs/YYYY-MM-DD/pretrade-check.md` | 寄り前の取消・承認チェック | 利用者 |
 | `decisions/*.md` | 売買判断・期限到来レビューの詳細 | 日次タスク |
@@ -45,6 +48,8 @@ ChatGPTデスクトップの同じチャットに、ローカルプロジェク�
 銘柄・取引・資金の詳しい正本と移行方法は[状態・台帳仕様 v0.2](operation-state-v0.2.md)に従う。とくに、部分利確済みフラグ、`S-B`連続数、再購入禁止、回収原資、業種上限、コーポレートアクションはチャットから推測しない。
 
 失敗時の厳密な完了条件と同時実行防止は[完了条件・重複防止 v0.1](run-integrity-v0.1.md)に従う。
+
+公式APIと一次資料キューは[公式情報源スキャン v0.1](official-source-scan-v0.1.md)に従う。
 
 正確な数量、価格、資産、税、証券会社注文IDはこの非公開領域だけに置く。認証情報、パスワード、APIキー、口座番号はここにも保存しない。
 
@@ -89,7 +94,7 @@ $japan-stock-operator を使って、このローカルプロジェクトの「�
 
 必ず operations/private/operation-policy.json、state.json と前回の handoff.json を正本として再開し、前回の開示カットオフ後から今回のJSTカットオフまでを確認してください。保有銘柄、未処理注文、監視銘柄を対象に日次イベントを確認し、期限が来た週次・月次・四半期・本決算・ルール運用レビューだけを同じ実行へ含めてください。
 
-scripts/daily_operation.py prepare で当日フォルダを作成または再開し、返された run_token を保持してください。report.md、coverage.json、sources.csv、orders.csv、必要な個別判断ログ、handoff.json を更新してください。注文票の状態はoperation-policyに従い、PAPERでは PAPER_PROPOSED、昇格条件を満たすLIVEでは PROPOSED、PAUSEDまたは昇格条件未達では作成禁止としてください。証券会社へ注文を送信しないでください。重要な対象を確認できなければ同じrun_tokenで failed としてカットオフを進めず、取得できなかった内容を残してください。完了時は同じrun_tokenで complete を実行し、最後に総合結果、調査結果、緊急判断、翌営業日のアクションと注文候補、人間が行うこと、保存先を簡潔に報告してください。
+scripts/daily_operation.py prepare で当日フォルダを作成または再開し、返された run_token を保持してください。同じtokenで scripts/official_source_scan.py を実行し、research-queue.jsonの全タスクを一次資料で処理してください。report.md、coverage.json、sources.csv、orders.csv、必要な個別判断ログ、handoff.json を更新してください。注文票の状態はoperation-policyに従い、PAPERでは PAPER_PROPOSED、昇格条件を満たすLIVEでは PROPOSED、PAUSEDまたは昇格条件未達では作成禁止としてください。証券会社へ注文を送信しないでください。重要な対象を確認できなければ同じrun_tokenで failed としてカットオフを進めず、取得できなかった内容を残してください。完了時は同じrun_tokenで complete を実行し、最後に総合結果、調査結果、緊急判断、翌営業日のアクションと注文候補、人間が行うこと、保存先を簡潔に報告してください。
 ~~~
 
 ## 5. 1回の実行フロー
@@ -97,7 +102,7 @@ scripts/daily_operation.py prepare で当日フォルダを作成または再開
 1. `prepare` を実行し、返された`run_token`を保持する。同日の実行が`locked`なら別実行を開始しない
 2. `operation-policy.json`、`state.json`、保有、取引・資金台帳、再購入禁止、監視、未処理注文、前回引き継ぎを読み、`operation_state.py validate`を通す
 3. 今回のJST情報カットオフを宣言する
-4. 前回カットオフ後のTDnet、EDINET、会社IR、JPXを差分確認する
+4. `official_source_scan.py`でTDnet、EDINET、決算サマリー、日足を差分取得し、生成されたキューで会社IRとJPXを確認する
 5. `S-A`を最優先し、注文候補に新情報があれば `WAIT` または取消候補にする
 6. 期限到来キューだけ週次・月次・四半期・本決算レビューする
 7. 判断根拠を `sources.csv` と日次レポートへ記録し、`coverage.json`の確認済み対象を更新する
@@ -116,6 +121,16 @@ scripts/daily_operation.py prepare で当日フォルダを作成または再開
 ~~~bash
 .venv/bin/python scripts/daily_operation.py prepare \
   --at 2026-08-31T18:30:00+09:00
+~~~
+
+続けて、同じtokenで公式情報源を取得する。
+
+~~~bash
+.venv/bin/python scripts/official_source_scan.py \
+  --run-id 2026-08-31 \
+  --run-token '<prepareが返したrun_token>' \
+  --cutoff 2026-08-31T18:30:00+09:00 \
+  --at 2026-08-31T18:35:00+09:00
 ~~~
 
 成功時:
