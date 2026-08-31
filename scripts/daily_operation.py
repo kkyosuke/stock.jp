@@ -71,6 +71,8 @@ def initialize_workspace(root: Path = PROJECT_ROOT) -> dict[str, list[str]]:
 
     files = {
         "daily-run-state-template.json": private / "state.json",
+        "operation-policy.json": private / "operation-policy.json",
+        "rule-review-log.csv": private / "rule-review-log.csv",
         "watchlist.csv": private / "watchlist.csv",
         "portfolio-register.csv": private / "portfolio-register.csv",
         "run-history-template.csv": private / "run-history.csv",
