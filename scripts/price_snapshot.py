@@ -199,7 +199,7 @@ def validate_tracked_price_snapshot(
         target_coverage = (
             (len(active_targets) - len(target_failures)) / len(active_targets)
             if active_targets
-            else 0.0
+            else 1.0
         )
         if target_coverage < required_targets:
             failures.append("tracked Yahoo archive does not cover every active target")

@@ -40,6 +40,22 @@ class PriceSnapshotTest(unittest.TestCase):
             self.assertEqual(evidence["target_codes"], ["1234"])
             self.assertEqual(evidence["target_coverage_ratio"], 1.0)
 
+    def test_empty_active_subset_still_validates_the_full_archive(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            write_price_archive(root, ["1234"])
+
+            evidence, failures = validate_tracked_price_snapshot(
+                root=root,
+                active_targets=set(),
+                cutoff=datetime(2026, 9, 1, 18, 30, tzinfo=JST),
+                config=CONFIG,
+            )
+
+            self.assertEqual(failures, [])
+            self.assertEqual(evidence["target_count"], 0)
+            self.assertEqual(evidence["target_coverage_ratio"], 1.0)
+
     def test_missing_active_target_fails_closed(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)

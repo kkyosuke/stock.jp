@@ -74,7 +74,7 @@ GitHub Actionsが平日18:30にJPXの現行内国株式全体をYahoo Financeか
 
 最初に`.github/workflows/daily-stock-prices.yml`の最新データPRがマージ済みで、`data/daily-prices/latest.json`がその最新CSVを指していることを確認する。利用者が全銘柄を手入力する必要はない。月次レビューでは蓄積済みの全市場日足から候補を絞り、AIが一次資料と長期条件を確認した銘柄だけ`watchlist.csv`へ登録する。現在の保有がある場合だけ`portfolio-register.csv`へ正確に登録する。
 
-`operation_bootstrap.py check`は、active対象が1件以上あること、最新CSVのchecksum、全市場98%以上、active対象100%、7日以内の鮮度、31日以内の検証済みバックアップを確認する。`paper_blockers`が1件でもあれば夜間runを開始しない。
+`operation_bootstrap.py check`は、最新CSVのchecksum、全市場98%以上、存在するactive対象の100%、7日以内の鮮度、31日以内の検証済みバックアップを確認する。active対象0件はblockerにせず、その日は`GLOBAL / NO-ACTION`と初回全市場候補レビューだけを行う。`paper_blockers`が1件でもあれば夜間runを開始しない。
 
 その後、下記の定時タスク用プロンプトをチャットで1回手動実行し、対象件数、根拠URL、注文候補、引き継ぎが期待どおりか確認する。最初の数回は必ず結果をレビューする。
 

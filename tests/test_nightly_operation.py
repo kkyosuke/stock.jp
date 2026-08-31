@@ -428,11 +428,38 @@ class NightlyOperationTest(unittest.TestCase):
 
         self.assertTrue(any("archive does not exist" in error for error in errors))
 
-    def test_empty_universe_is_blocked_before_run_creation(self) -> None:
-        with self.assertRaisesRegex(PermissionError, "active universe is empty"):
-            self._start()
-        self.assertFalse(
-            (self.root / "operations/private/runs/2026-08-31").exists()
+    def test_empty_universe_starts_initial_review_with_global_no_action(self) -> None:
+        started = self._start()
+        run_dir = self.root / str(started["run_dir"])
+        plan = json.loads((run_dir / "work-plan.json").read_text(encoding="utf-8"))
+        with (run_dir / "next-day-actions.csv").open(
+            encoding="utf-8", newline=""
+        ) as source:
+            actions = list(csv.DictReader(source))
+
+        self.assertTrue(started["paper_go"])
+        self.assertIn(
+            "2026-08-31-initial-universe-review",
+            {task["task_id"] for task in plan["tasks"]},
+        )
+        self.assertEqual(actions[0]["code"], "GLOBAL")
+        self.assertEqual(actions[0]["next_action"], "NO-ACTION")
+
+    def test_empty_universe_does_not_repeat_initial_review_after_a_prior_run(self) -> None:
+        state_path = self.root / "operations/private/state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["last_run_id"] = "2026-08-28"
+        state["last_successful_run_at_jst"] = "2026-08-28T19:00:00+09:00"
+        state["last_disclosure_cutoff_jst"] = "2026-08-28T18:30:00+09:00"
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+
+        started = self._start()
+        run_dir = self.root / str(started["run_dir"])
+        plan = json.loads((run_dir / "work-plan.json").read_text(encoding="utf-8"))
+
+        self.assertNotIn(
+            "2026-08-31-initial-universe-review",
+            {task["task_id"] for task in plan["tasks"]},
         )
 
     def test_failed_finalize_restores_next_run_handoff(self) -> None:
