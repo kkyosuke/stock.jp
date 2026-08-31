@@ -1,0 +1,364 @@
+"""Initialize, migrate, and validate the private operation state."""
+
+from __future__ import annotations
+
+import argparse
+import csv
+from datetime import date, datetime
+import json
+import os
+from pathlib import Path
+import shutil
+import tempfile
+from typing import Any
+from zoneinfo import ZoneInfo
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+JST = ZoneInfo("Asia/Tokyo")
+STATE_SCHEMA_VERSION = "2.0"
+
+TEMPLATE_TO_PRIVATE = {
+    "daily-run-state-template.json": "state.json",
+    "operation-policy.json": "operation-policy.json",
+    "rule-review-log.csv": "rule-review-log.csv",
+    "watchlist.csv": "watchlist.csv",
+    "portfolio-register.csv": "portfolio-register.csv",
+    "run-history-template.csv": "run-history.csv",
+    "market-regime-log.csv": "market-regime-log.csv",
+    "trade-event-ledger.csv": "trade-event-ledger.csv",
+    "recovered-capital-ledger.csv": "recovered-capital-ledger.csv",
+    "capital-ledger.csv": "capital-ledger.csv",
+    "corporate-actions.csv": "corporate-actions.csv",
+    "rebuy-restrictions.csv": "rebuy-restrictions.csv",
+    "industry-exposure.csv": "industry-exposure.csv",
+    "schema-migration-log.csv": "schema-migration-log.csv",
+}
+
+CSV_MIGRATIONS = {
+    "portfolio-register.csv": "portfolio-register.csv",
+    "run-history.csv": "run-history-template.csv",
+}
+
+LEDGER_IDS = {
+    "trade-event-ledger.csv": "event_id",
+    "recovered-capital-ledger.csv": "recovery_id",
+    "capital-ledger.csv": "event_id",
+    "corporate-actions.csv": "action_id",
+    "rebuy-restrictions.csv": "restriction_id",
+}
+
+
+def _private_root(root: Path) -> Path:
+    return root / "operations/private"
+
+
+def _template_root(root: Path) -> Path:
+    return root / "operations/templates"
+
+
+def _atomic_write_text(path: Path, value: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=path.parent, delete=False
+    ) as temporary:
+        temporary.write(value)
+        temporary_path = Path(temporary.name)
+    temporary_path.chmod(0o600)
+    temporary_path.replace(path)
+
+
+def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
+    _atomic_write_text(
+        path, json.dumps(value, ensure_ascii=False, indent=2, sort_keys=False) + "\n"
+    )
+
+
+def _normalized_state(state: dict[str, Any]) -> dict[str, Any]:
+    version = state.get("schema_version")
+    if version not in {"1.0", STATE_SCHEMA_VERSION}:
+        raise ValueError(f"unsupported state schema: {version!r}")
+    normalized = dict(state)
+    normalized["schema_version"] = STATE_SCHEMA_VERSION
+    normalized.setdefault("state_revision", 0)
+    normalized.setdefault("unreconciled_ticket_ids", [])
+    normalized.setdefault("last_ledger_reconciliation_at_jst", None)
+    normalized.setdefault("consecutive_successful_runs", 0)
+    reviews = normalized.get("last_rule_reviews")
+    if not isinstance(reviews, dict):
+        reviews = {}
+    normalized["last_rule_reviews"] = {
+        "monthly_operations": reviews.get("monthly_operations"),
+        "quarterly_performance": reviews.get("quarterly_performance"),
+        "annual_promotion": reviews.get("annual_promotion"),
+    }
+    normalized.setdefault("last_backup_at_jst", None)
+    return normalized
+
+
+def _csv_header(path: Path) -> list[str]:
+    with path.open(encoding="utf-8", newline="") as source:
+        return next(csv.reader(source), [])
+
+
+def _template_header(path: Path) -> list[str]:
+    return _csv_header(path)
+
+
+def _migrate_csv(path: Path, template_path: Path) -> None:
+    target_fields = _template_header(template_path)
+    with path.open(encoding="utf-8", newline="") as source:
+        rows = list(csv.DictReader(source))
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", newline="", dir=path.parent, delete=False
+    ) as temporary:
+        writer = csv.DictWriter(
+            temporary, fieldnames=target_fields, extrasaction="ignore", lineterminator="\n"
+        )
+        writer.writeheader()
+        writer.writerows(rows)
+        temporary_path = Path(temporary.name)
+    temporary_path.chmod(0o600)
+    temporary_path.replace(path)
+
+
+def _relative(path: Path, root: Path) -> str:
+    return path.relative_to(root).as_posix()
+
+
+def _planned_migrations(root: Path) -> list[tuple[Path, Path | None]]:
+    private = _private_root(root)
+    templates = _template_root(root)
+    planned: list[tuple[Path, Path | None]] = []
+    state_path = private / "state.json"
+    if state_path.is_file():
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        if _normalized_state(state) != state:
+            planned.append((state_path, None))
+    for private_name, template_name in CSV_MIGRATIONS.items():
+        path = private / private_name
+        template = templates / template_name
+        if path.is_file() and _csv_header(path) != _template_header(template):
+            planned.append((path, template))
+    order_template = templates / "order-ticket-template.csv"
+    for path in sorted((private / "runs").glob("*/orders.csv")):
+        if _csv_header(path) != _template_header(order_template):
+            planned.append((path, order_template))
+    return planned
+
+
+def _backup_migrations(
+    *, root: Path, planned: list[tuple[Path, Path | None]], migrated_at: datetime
+) -> Path | None:
+    if not planned:
+        return None
+    private = _private_root(root)
+    backup = private / "migrations" / migrated_at.strftime("%Y%m%dT%H%M%S.%f%z")
+    for source, _ in planned:
+        relative = source.relative_to(private)
+        destination = backup / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+    return backup
+
+
+def secure_private_tree(root: Path = PROJECT_ROOT) -> None:
+    private = _private_root(root)
+    if not private.exists():
+        return
+    for directory, child_directories, filenames in os.walk(private):
+        directory_path = Path(directory)
+        if not directory_path.is_symlink():
+            directory_path.chmod(0o700)
+        child_directories[:] = [
+            name
+            for name in child_directories
+            if not (directory_path / name).is_symlink()
+        ]
+        for name in child_directories:
+            (directory_path / name).chmod(0o700)
+        for name in filenames:
+            path = directory_path / name
+            if not path.is_symlink():
+                path.chmod(0o600)
+
+
+def initialize_or_migrate_workspace(
+    root: Path = PROJECT_ROOT,
+) -> dict[str, Any]:
+    templates = _template_root(root)
+    private = _private_root(root)
+    private.mkdir(parents=True, exist_ok=True, mode=0o700)
+    (private / "runs").mkdir(exist_ok=True, mode=0o700)
+    (private / "decisions").mkdir(exist_ok=True, mode=0o700)
+
+    planned = _planned_migrations(root)
+    migrated_at = datetime.now(JST)
+    backup = _backup_migrations(root=root, planned=planned, migrated_at=migrated_at)
+
+    created: list[str] = []
+    existing: list[str] = []
+    for template_name, private_name in TEMPLATE_TO_PRIVATE.items():
+        destination = private / private_name
+        if destination.exists():
+            existing.append(_relative(destination, root))
+            continue
+        shutil.copyfile(templates / template_name, destination)
+        created.append(_relative(destination, root))
+
+    migrated: list[str] = []
+    from_schema = STATE_SCHEMA_VERSION
+    for path, template in planned:
+        if path.name == "state.json":
+            state = json.loads(path.read_text(encoding="utf-8"))
+            from_schema = str(state.get("schema_version"))
+            _atomic_write_json(path, _normalized_state(state))
+        else:
+            if template is None:
+                raise AssertionError("CSV migration requires a template")
+            _migrate_csv(path, template)
+        migrated.append(_relative(path, root))
+
+    if migrated:
+        migration_log = private / "schema-migration-log.csv"
+        with migration_log.open("a", encoding="utf-8", newline="") as destination:
+            csv.writer(destination, lineterminator="\n").writerow(
+                [
+                    migrated_at.isoformat(timespec="seconds"),
+                    from_schema,
+                    STATE_SCHEMA_VERSION,
+                    "|".join(migrated),
+                    _relative(backup, root) if backup else "",
+                    "SUCCESS",
+                    "automatic non-destructive migration",
+                ]
+            )
+
+    secure_private_tree(root)
+    return {
+        "created": created,
+        "existing": existing,
+        "migrated": migrated,
+        "backup_dir": _relative(backup, root) if backup else None,
+        "schema_version": STATE_SCHEMA_VERSION,
+    }
+
+
+def _read_csv(path: Path) -> list[dict[str, str]]:
+    with path.open(encoding="utf-8", newline="") as source:
+        return list(csv.DictReader(source))
+
+
+def _duplicate_values(rows: list[dict[str, str]], key: str) -> list[str]:
+    values = [row.get(key, "").strip() for row in rows if row.get(key, "").strip()]
+    return sorted({value for value in values if values.count(value) > 1})
+
+
+def validate_workspace(root: Path = PROJECT_ROOT) -> list[str]:
+    private = _private_root(root)
+    templates = _template_root(root)
+    errors: list[str] = []
+    state_path = private / "state.json"
+    if not state_path.is_file():
+        return ["missing operations/private/state.json"]
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    if state.get("schema_version") != STATE_SCHEMA_VERSION:
+        errors.append(f"state schema must be {STATE_SCHEMA_VERSION}")
+    if not isinstance(state.get("unreconciled_ticket_ids"), list):
+        errors.append("unreconciled_ticket_ids must be a list")
+
+    for template_name, private_name in TEMPLATE_TO_PRIVATE.items():
+        path = private / private_name
+        if not path.is_file():
+            errors.append(f"missing operations/private/{private_name}")
+            continue
+        if path.suffix == ".csv" and _csv_header(path) != _template_header(
+            templates / template_name
+        ):
+            errors.append(f"schema mismatch: operations/private/{private_name}")
+
+    portfolio_path = private / "portfolio-register.csv"
+    if portfolio_path.is_file():
+        positions = _read_csv(portfolio_path)
+        for code in _duplicate_values(positions, "code"):
+            errors.append(f"duplicate portfolio code: {code}")
+        for row in positions:
+            code = row.get("code", "<blank>")
+            for field in ("five_x_taken", "ten_x_taken"):
+                if row.get(field, "").strip().lower() not in {
+                    "",
+                    "true",
+                    "false",
+                    "0",
+                    "1",
+                }:
+                    errors.append(f"{code}: {field} must be boolean")
+            streak = row.get("sb_consecutive_quarters", "").strip()
+            if streak:
+                try:
+                    if int(streak) < 0:
+                        raise ValueError
+                except ValueError:
+                    errors.append(f"{code}: sb_consecutive_quarters must be >= 0")
+            factor = row.get("corporate_action_factor", "").strip()
+            if factor:
+                try:
+                    if float(factor) <= 0:
+                        raise ValueError
+                except ValueError:
+                    errors.append(f"{code}: corporate_action_factor must be > 0")
+
+    for filename, id_field in LEDGER_IDS.items():
+        path = private / filename
+        if not path.is_file():
+            continue
+        for value in _duplicate_values(_read_csv(path), id_field):
+            errors.append(f"duplicate {filename} {id_field}: {value}")
+
+    restrictions = private / "rebuy-restrictions.csv"
+    if restrictions.is_file():
+        for row in _read_csv(restrictions):
+            value = row.get("no_rebuy_until", "").strip()
+            if value:
+                try:
+                    date.fromisoformat(value)
+                except ValueError:
+                    errors.append(
+                        f"{row.get('restriction_id', '<blank>')}: invalid no_rebuy_until"
+                    )
+    return errors
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("command", choices=("migrate", "validate", "status"))
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    if args.command == "migrate":
+        result = initialize_or_migrate_workspace()
+    elif args.command == "validate":
+        initialize_or_migrate_workspace()
+        errors = validate_workspace()
+        result = {"valid": not errors, "errors": errors}
+    else:
+        initialize_or_migrate_workspace()
+        state = json.loads(
+            (_private_root(PROJECT_ROOT) / "state.json").read_text(encoding="utf-8")
+        )
+        result = {
+            "schema_version": state.get("schema_version"),
+            "state_revision": state.get("state_revision"),
+            "unreconciled_ticket_count": len(
+                state.get("unreconciled_ticket_ids", [])
+            ),
+            "validation_errors": validate_workspace(),
+        }
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0 if not result.get("errors") else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

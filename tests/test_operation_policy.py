@@ -1,6 +1,7 @@
 import copy
 import json
 from pathlib import Path
+import shutil
 from tempfile import TemporaryDirectory
 import unittest
 
@@ -80,19 +81,9 @@ class OperationPolicyTest(unittest.TestCase):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "operations").mkdir()
-            templates = root / "operations/templates"
-            templates.mkdir()
-            for name in (
-                "daily-run-state-template.json",
-                "operation-policy.json",
-                "rule-review-log.csv",
-                "watchlist.csv",
-                "portfolio-register.csv",
-                "run-history-template.csv",
-            ):
-                (templates / name).write_bytes(
-                    (ROOT / "operations/templates" / name).read_bytes()
-                )
+            shutil.copytree(
+                ROOT / "operations/templates", root / "operations/templates"
+            )
             initialize_workspace(root)
             private_policy = root / "operations/private/operation-policy.json"
             original = load_policy(private_policy)

@@ -1,8 +1,8 @@
 # 日次運用レポート {{RUN_ID}}
 
 - 実行状態: `IN-PROGRESS`
-- 運用モード: `PAPER / LIVE / PAUSED`
-- 適用ルール版: 未確定
+- 運用モード: `{{OPERATION_MODE}}`
+- 適用ルール版: `{{ACTIVE_RULE_VERSION}}`
 - 開始日時（JST）: {{STARTED_AT_JST}}
 - 前回の開示カットオフ（JST）: {{PREVIOUS_CUTOFF_JST}}
 - 今回の開示カットオフ（JST）: 未確定
