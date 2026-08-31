@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 from datetime import datetime, timedelta
 import json
+import math
 from pathlib import Path
 import tempfile
 from typing import Any
@@ -51,6 +52,7 @@ VALID_ACTIONS = {
     "SELL",
     "NO-ACTION",
 }
+TRADE_ACTIONS = {"BUY", "ADD", "REDUCE", "SELL"}
 OPEN_TICKET_STATUSES = {"PAPER_PROPOSED", "PROPOSED", "SUBMITTED", "PARTIAL_FILL"}
 
 
@@ -346,6 +348,15 @@ def _validate_sources(
             errors.append(
                 f"source {row.get('source_id', '<blank>')} primary_source invalid"
             )
+        if row.get("used_for_decision", "").strip().lower() not in {
+            "true",
+            "false",
+            "1",
+            "0",
+        }:
+            errors.append(
+                f"source {row.get('source_id', '<blank>')} used_for_decision invalid"
+            )
     for name, source in coverage.get("official_sources", {}).items():
         if source.get("status") == "CHECKED" and name not in categories:
             errors.append(f"checked source {name} has no sources.csv evidence row")
@@ -471,34 +482,84 @@ def _validate_orders(
                 raise ValueError
         except ValueError:
             errors.append(f"order {ticket_id or '<blank>'} has invalid trade_date")
+        prepared_at: datetime | None = None
         try:
-            _parse_aware(row.get("prepared_at_jst", ""))
+            prepared_at = _parse_aware(row.get("prepared_at_jst", ""))
         except (TypeError, ValueError):
             errors.append(f"order {ticket_id or '<blank>'} has invalid prepared_at_jst")
+        try:
+            valid_until = _parse_aware(row.get("valid_until_jst", ""))
+            if valid_until.date().isoformat() != trade_date:
+                errors.append(
+                    f"order {ticket_id or '<blank>'} valid_until_jst must be on trade_date"
+                )
+            if prepared_at is not None and valid_until <= prepared_at:
+                errors.append(
+                    f"order {ticket_id or '<blank>'} valid_until_jst must be after preparation"
+                )
+        except (TypeError, ValueError):
+            errors.append(f"order {ticket_id or '<blank>'} has invalid valid_until_jst")
         if row.get("order_type", "").strip().upper() not in {
             "LIMIT",
             "当日限り指値",
             "分割指値",
         }:
             errors.append(f"order {ticket_id or '<blank>'} must use a limit order")
-        for numeric_field in ("limit_price", "quantity_private", "position_pct"):
+        numeric_values: dict[str, float] = {}
+        for numeric_field in (
+            "limit_price",
+            "quantity_private",
+            "position_pct",
+            "participation_cap_pct",
+        ):
             try:
-                if float(row.get(numeric_field, "")) <= 0:
+                numeric = float(row.get(numeric_field, ""))
+                if not math.isfinite(numeric) or numeric <= 0:
                     raise ValueError
+                numeric_values[numeric_field] = numeric
             except ValueError:
                 errors.append(
                     f"order {ticket_id or '<blank>'} {numeric_field} must be > 0"
                 )
+        quantity = numeric_values.get("quantity_private")
+        if quantity is not None and not quantity.is_integer():
+            errors.append(f"order {ticket_id or '<blank>'} quantity_private must be an integer")
+        position_pct = numeric_values.get("position_pct")
+        if position_pct is not None and position_pct > 100:
+            errors.append(f"order {ticket_id or '<blank>'} position_pct must be <= 100")
+        participation = numeric_values.get("participation_cap_pct")
+        if participation is not None and participation > 10:
+            errors.append(
+                f"order {ticket_id or '<blank>'} participation_cap_pct must be <= 10"
+            )
         if row.get("operation_mode", "").strip() != policy.get("operation_mode"):
             errors.append(f"order {ticket_id or '<blank>'} operation_mode mismatch")
         if row.get("rule_version", "").strip() != policy.get("active_rule_version"):
             errors.append(f"order {ticket_id or '<blank>'} rule_version mismatch")
         if row.get("status", "").strip() != status["ticket_status"]:
             errors.append(f"order {ticket_id or '<blank>'} has disallowed status")
-        if row.get("action", "").strip().upper() not in VALID_ACTIONS:
+        action = row.get("action", "").strip().upper()
+        if action not in TRADE_ACTIONS:
             errors.append(f"order {ticket_id or '<blank>'} has invalid action")
         if side not in {"BUY", "SELL"}:
             errors.append(f"order {ticket_id or '<blank>'} side must be BUY or SELL")
+        expected_side = "BUY" if action in {"BUY", "ADD"} else "SELL"
+        if action in TRADE_ACTIONS and side != expected_side:
+            errors.append(
+                f"order {ticket_id or '<blank>'} {action} requires side {expected_side}"
+            )
+        for field in (
+            "submitted_at_jst",
+            "broker_order_id_private",
+            "filled_quantity_private",
+            "average_fill_price",
+            "fees",
+            "tax",
+        ):
+            if row.get(field, "").strip():
+                errors.append(
+                    f"proposed order {ticket_id or '<blank>'} must not contain {field}"
+                )
         if ticket_id in previous_ids:
             errors.append(f"order ticket already exists in an earlier run: {ticket_id}")
         if code in previous_codes:

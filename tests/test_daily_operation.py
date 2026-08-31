@@ -347,6 +347,47 @@ class DailyOperationTest(unittest.TestCase):
                 root=self.root,
             )
 
+    def test_malformed_order_values_cannot_complete_a_run(self) -> None:
+        prepared = prepare_run(at="2026-08-31T18:30:00+09:00", root=self.root)
+        complete_artifacts(self.root, prepared)
+        append_paper_order(self.root, prepared)
+        orders_path = self.root / str(prepared["run_dir"]) / "orders.csv"
+        with orders_path.open(encoding="utf-8", newline="") as source:
+            reader = csv.DictReader(source)
+            fields = list(reader.fieldnames or [])
+            orders = list(reader)
+        orders[0].update(
+            {
+                "side": "SELL",
+                "quantity_private": "nan",
+                "valid_until_jst": "2026-09-02T15:30:00+09:00",
+                "participation_cap_pct": "11",
+                "broker_order_id_private": "must-not-exist",
+            }
+        )
+        with orders_path.open("w", encoding="utf-8", newline="") as destination:
+            writer = csv.DictWriter(destination, fieldnames=fields)
+            writer.writeheader()
+            writer.writerows(orders)
+
+        with self.assertRaisesRegex(
+            ValueError, "quantity_private must be > 0"
+        ) as raised:
+            complete_run(
+                run_id="2026-08-31",
+                completed_at="2026-08-31T19:05:00+09:00",
+                source_cutoff="2026-08-31T18:30:00+09:00",
+                price_date="2026-08-31",
+                summary="must not complete",
+                run_token=str(prepared["run_token"]),
+                root=self.root,
+            )
+        message = str(raised.exception)
+        self.assertIn("BUY requires side BUY", message)
+        self.assertIn("valid_until_jst must be on trade_date", message)
+        self.assertIn("participation_cap_pct must be <= 10", message)
+        self.assertIn("must not contain broker_order_id_private", message)
+
     def test_failed_run_does_not_advance_cutoff_and_can_be_resumed(self) -> None:
         prepare_run(at="2026-08-31T18:30:00+09:00", root=self.root)
         prepared = prepare_run(
