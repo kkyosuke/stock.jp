@@ -81,7 +81,11 @@ def _normalized_state(state: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(state)
     normalized["schema_version"] = STATE_SCHEMA_VERSION
     normalized.setdefault("state_revision", 0)
-    normalized.setdefault("unreconciled_ticket_ids", [])
+    if "unreconciled_ticket_ids" not in normalized:
+        legacy_pending = normalized.get("pending_orders", [])
+        normalized["unreconciled_ticket_ids"] = (
+            list(legacy_pending) if isinstance(legacy_pending, list) else []
+        )
     normalized.setdefault("last_ledger_reconciliation_at_jst", None)
     normalized.setdefault("consecutive_successful_runs", 0)
     reviews = normalized.get("last_rule_reviews")

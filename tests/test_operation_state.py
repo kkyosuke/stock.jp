@@ -98,6 +98,7 @@ class OperationStateTest(unittest.TestCase):
 
         self.assertEqual(state["schema_version"], "2.0")
         self.assertEqual(state["pending_orders"], ["ticket-1"])
+        self.assertEqual(state["unreconciled_ticket_ids"], ["ticket-1"])
         self.assertEqual(positions[0]["code"], "1234")
         self.assertEqual(positions[0]["average_cost"], "1000")
         self.assertEqual(positions[0]["five_x_taken"], "")
