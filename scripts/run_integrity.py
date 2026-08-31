@@ -396,6 +396,14 @@ def _validate_data_gaps(*containers: Any) -> list[str]:
             if not isinstance(value, dict):
                 errors.append("data gap must be an object")
                 continue
+            if str(value.get("status", "OPEN")).upper() == "RESOLVED":
+                if not value.get("resolved_at_jst") or not value.get(
+                    "resolution_evidence"
+                ):
+                    errors.append(
+                        "resolved data gap requires resolved_at_jst and resolution_evidence"
+                    )
+                continue
             severity = str(value.get("severity", "")).upper()
             if severity in {"CRITICAL", "BLOCKING"}:
                 errors.append(
@@ -405,6 +413,61 @@ def _validate_data_gaps(*containers: Any) -> list[str]:
                 errors.append("data gap severity must be LOW, NON_CRITICAL, or CRITICAL")
             if not value.get("impact") or not value.get("retry_after_jst"):
                 errors.append("non-blocking data gap requires impact and retry_after_jst")
+    return errors
+
+
+def _validate_research_artifacts(
+    *,
+    health: dict[str, Any],
+    queue: dict[str, Any],
+    run_id: str,
+    handoff: dict[str, Any],
+) -> list[str]:
+    errors: list[str] = []
+    if health.get("run_id") != run_id:
+        errors.append("provider-health run_id mismatch")
+    if health.get("status") not in {"COMPLETED", "PARTIAL"}:
+        errors.append("official source scan has not run")
+    if not health.get("started_at_jst") or not health.get("completed_at_jst"):
+        errors.append("provider-health requires start and completion timestamps")
+    if queue.get("run_id") != run_id:
+        errors.append("research-queue run_id mismatch")
+    if not queue.get("generated_at_jst"):
+        errors.append("research queue has not been generated")
+    pending_reviews = set(_identifier_list(handoff.get("pending_reviews", [])))
+    tasks = queue.get("tasks")
+    if not isinstance(tasks, list):
+        return errors + ["research queue tasks must be a list"]
+    task_ids: list[str] = []
+    for task in tasks:
+        if not isinstance(task, dict):
+            errors.append("research task must be an object")
+            continue
+        task_id = str(task.get("task_id", "")).strip()
+        task_ids.append(task_id)
+        if not task_id:
+            errors.append("research task requires task_id")
+        status = str(task.get("status", "")).upper()
+        if status == "PENDING":
+            errors.append(f"research task remains pending: {task_id or '<blank>'}")
+        elif status == "DEFERRED":
+            if task_id not in pending_reviews:
+                errors.append(
+                    f"deferred research task missing from handoff: {task_id or '<blank>'}"
+                )
+        elif status != "COMPLETED":
+            errors.append(
+                f"research task has invalid terminal status: {task_id or '<blank>'}"
+            )
+        if status == "COMPLETED" and not task.get("evidence_source_ids"):
+            errors.append(
+                f"completed research task lacks evidence: {task_id or '<blank>'}"
+            )
+    duplicates = sorted(
+        {value for value in task_ids if value and task_ids.count(value) > 1}
+    )
+    if duplicates:
+        errors.append(f"duplicate research task_id: {', '.join(duplicates)}")
     return errors
 
 
@@ -536,6 +599,8 @@ def validate_run_artifacts(
         "handoff.json",
         "coverage.json",
         "lease.json",
+        "provider-health.json",
+        "research-queue.json",
     )
     missing = [name for name in required if not (run_dir / name).is_file()]
     if missing:
@@ -549,6 +614,8 @@ def validate_run_artifacts(
     coverage = _read_json(run_dir / "coverage.json")
     policy = _read_json(private / "operation-policy.json")
     watermarks = _read_json(private / "source-watermarks.json")
+    health = _read_json(run_dir / "provider-health.json")
+    research_queue = _read_json(run_dir / "research-queue.json")
     report = (run_dir / "report.md").read_text(encoding="utf-8")
     source_fields, source_rows = _read_csv(run_dir / "sources.csv")
     order_fields, order_rows = _read_csv(run_dir / "orders.csv")
@@ -592,6 +659,14 @@ def validate_run_artifacts(
     errors.extend(
         _validate_data_gaps(
             handoff.get("data_gaps", []), coverage.get("data_gaps", [])
+        )
+    )
+    errors.extend(
+        _validate_research_artifacts(
+            health=health,
+            queue=research_queue,
+            run_id=run_id,
+            handoff=handoff,
         )
     )
     if handoff.get("operation_mode") != policy.get("operation_mode"):

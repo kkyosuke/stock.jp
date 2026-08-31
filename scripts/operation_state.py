@@ -34,6 +34,7 @@ TEMPLATE_TO_PRIVATE = {
     "industry-exposure.csv": "industry-exposure.csv",
     "schema-migration-log.csv": "schema-migration-log.csv",
     "source-watermarks.json": "source-watermarks.json",
+    "source-config-template.json": "source-config.json",
 }
 
 CSV_MIGRATIONS = {

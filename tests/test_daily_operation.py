@@ -50,6 +50,25 @@ def complete_artifacts(
         encoding="utf-8",
     )
 
+    health_path = run_dir / "provider-health.json"
+    health = json.loads(health_path.read_text(encoding="utf-8"))
+    health.update(
+        {
+            "status": "COMPLETED",
+            "started_at_jst": "2026-08-31T18:31:00+09:00",
+            "completed_at_jst": "2026-08-31T18:45:00+09:00",
+        }
+    )
+    health_path.write_text(
+        json.dumps(health, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    queue_path = run_dir / "research-queue.json"
+    queue = json.loads(queue_path.read_text(encoding="utf-8"))
+    queue["generated_at_jst"] = "2026-08-31T18:45:00+09:00"
+    queue_path.write_text(
+        json.dumps(queue, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+
     with (run_dir / "sources.csv").open("a", encoding="utf-8", newline="") as file:
         writer = csv.writer(file)
         for category in ("tdnet", "edinet", "jpx"):
@@ -179,6 +198,8 @@ class DailyOperationTest(unittest.TestCase):
             "pretrade-check.md",
             "coverage.json",
             "lease.json",
+            "provider-health.json",
+            "research-queue.json",
             "handoff.json",
         ):
             self.assertTrue(

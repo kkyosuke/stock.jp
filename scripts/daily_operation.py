@@ -119,6 +119,8 @@ def prepare_run(
                 "orders": _relative(run_dir / "orders.csv", root),
                 "sources": _relative(run_dir / "sources.csv", root),
                 "coverage": _relative(run_dir / "coverage.json", root),
+                "provider_health": _relative(run_dir / "provider-health.json", root),
+                "research_queue": _relative(run_dir / "research-queue.json", root),
                 "handoff": _relative(handoff_path, root),
             }
         lease = acquire_run_lease(
@@ -156,6 +158,8 @@ def prepare_run(
             "orders": _relative(run_dir / "orders.csv", root),
             "sources": _relative(run_dir / "sources.csv", root),
             "coverage": _relative(run_dir / "coverage.json", root),
+            "provider_health": _relative(run_dir / "provider-health.json", root),
+            "research_queue": _relative(run_dir / "research-queue.json", root),
             "handoff": _relative(handoff_path, root),
             "lease": _relative(run_dir / "lease.json", root),
             "run_token": lease["run_token"],
@@ -182,6 +186,13 @@ def prepare_run(
     )
     (run_dir / "sources.csv").write_text(SOURCE_HEADER, encoding="utf-8")
     write_coverage_manifest(root=root, run_dir=run_dir, run_id=run_id, state=state)
+    for template_name, destination_name in (
+        ("provider-health-template.json", "provider-health.json"),
+        ("research-queue-template.json", "research-queue.json"),
+    ):
+        value = _read_json(root / "operations/templates" / template_name)
+        value["run_id"] = run_id
+        _atomic_write_json(run_dir / destination_name, value)
     pretrade = (
         root / "operations/templates/pretrade-check-template.md"
     ).read_text(encoding="utf-8")
@@ -221,6 +232,8 @@ def prepare_run(
         "orders": _relative(run_dir / "orders.csv", root),
         "sources": _relative(run_dir / "sources.csv", root),
         "coverage": _relative(run_dir / "coverage.json", root),
+        "provider_health": _relative(run_dir / "provider-health.json", root),
+        "research_queue": _relative(run_dir / "research-queue.json", root),
         "handoff": _relative(handoff_path, root),
         "lease": _relative(run_dir / "lease.json", root),
         "run_token": lease["run_token"],
