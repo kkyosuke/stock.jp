@@ -4,14 +4,18 @@
 from __future__ import annotations
 
 import argparse
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 import json
 from pathlib import Path, PurePosixPath
 from typing import Any
+from zoneinfo import ZoneInfo
 
 
 class ScheduledUpdateError(RuntimeError):
     """Raised when a scheduled update requires human review."""
+
+
+JST = ZoneInfo("Asia/Tokyo")
 
 
 def _read_object(path: Path) -> dict[str, Any]:
@@ -21,7 +25,12 @@ def _read_object(path: Path) -> dict[str, Any]:
     return value
 
 
-def validate_summary(summary: dict[str, Any], *, lookback_days: int) -> None:
+def validate_summary(
+    summary: dict[str, Any],
+    *,
+    lookback_days: int,
+    reference_date: date | None = None,
+) -> None:
     if lookback_days < 1:
         raise ScheduledUpdateError("lookback_days must be >= 1")
     universe = summary.get("universe")
@@ -35,6 +44,8 @@ def validate_summary(summary: dict[str, Any], *, lookback_days: int) -> None:
     error_count = fetch.get("error_count")
     if type(universe_count) is not int or universe_count <= 0:
         raise ScheduledUpdateError("universe count must be a positive integer")
+    if type(success_count) is not int or type(error_count) is not int:
+        raise ScheduledUpdateError("fetch counts must be integers")
     if success_count != universe_count or error_count != 0:
         raise ScheduledUpdateError("unattended merge requires zero fetch errors")
 
@@ -45,7 +56,7 @@ def validate_summary(summary: dict[str, Any], *, lookback_days: int) -> None:
         raise ScheduledUpdateError("latest quote counts must be integers")
     if quote_count < 0 or no_quote_count < 0:
         raise ScheduledUpdateError("latest quote counts must be non-negative")
-    if latest_fetch_errors != 0:
+    if type(latest_fetch_errors) is not int or latest_fetch_errors != 0:
         raise ScheduledUpdateError("latest session contains fetch errors")
     if quote_count + no_quote_count != universe_count:
         raise ScheduledUpdateError("latest session count does not match the universe")
@@ -54,6 +65,12 @@ def validate_summary(summary: dict[str, Any], *, lookback_days: int) -> None:
         latest_date = date.fromisoformat(str(summary["latest_trading_date"]))
     except (KeyError, ValueError) as error:
         raise ScheduledUpdateError("latest_trading_date is invalid") from error
+    reference_date = reference_date or datetime.now(JST).date()
+    age_days = (reference_date - latest_date).days
+    if age_days < 0:
+        raise ScheduledUpdateError("latest_trading_date cannot be in the future")
+    if age_days > lookback_days:
+        raise ScheduledUpdateError("latest_trading_date is stale")
     earliest_allowed = latest_date - timedelta(days=lookback_days - 1)
 
     changed_files = summary.get("changed_files")
