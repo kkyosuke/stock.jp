@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import csv
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 import tempfile
 import unittest
@@ -14,6 +14,7 @@ from scripts.live_gate_evidence import (
     evaluate_official_coverage,
     evaluate_paper_duration,
     evaluate_point_in_time,
+    evaluate_repository_recovery,
     evaluate_shadow_run,
     write_private_evidence,
 )
@@ -479,6 +480,79 @@ class OfficialCoverageEvidenceTest(unittest.TestCase):
             result = evaluate_official_coverage(root=root)
         self.assertFalse(result["eligible"])
         self.assertTrue(any("non-primary tdnet" in item for item in result["blockers"]))
+
+
+class RepositoryRecoveryEvidenceTest(unittest.TestCase):
+    def _write_drill(self, root: Path) -> Path:
+        commit = "1" * 40
+        public_commit = "2" * 40
+        drill = {
+            "schema_version": "1.0",
+            "drill_id": "recovery-2026-q3",
+            "operator": "portfolio-owner",
+            "repository_visibility": "PRIVATE",
+            "started_at_jst": "2026-08-31T20:00:00+09:00",
+            "completed_at_jst": "2026-08-31T21:00:00+09:00",
+            "source_private_commit": commit,
+            "recovered_private_commit": commit,
+            "source_public_submodule_commit": public_commit,
+            "recovered_public_submodule_commit": public_commit,
+            "checks": {
+                name: True
+                for name in (
+                    "clean_clone_with_submodules",
+                    "workspace_setup",
+                    "state_validation",
+                    "paper_bootstrap_check",
+                    "latest_successful_run",
+                    "latest_handoff",
+                    "all_ledgers",
+                    "unreconciled_orders",
+                    "private_remote_restore",
+                    "access_controlled_mirror_restore",
+                )
+            },
+            "result_notes": "clean checkout and protected mirror both reconciled",
+        }
+        path = root / "operations/private/evidence/recovery-drill.json"
+        _write(path, json.dumps(drill))
+        return path
+
+    def test_recent_complete_recovery_is_eligible(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_drill(root)
+            result = evaluate_repository_recovery(
+                root=root,
+                at=datetime.fromisoformat("2026-09-01T09:00:00+09:00"),
+            )
+        self.assertTrue(result["eligible"], result["blockers"])
+        self.assertEqual(result["metrics"]["passed_check_count"], 10)
+
+    def test_stale_recovery_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_drill(root)
+            result = evaluate_repository_recovery(
+                root=root,
+                at=datetime.fromisoformat("2026-12-15T09:00:00+09:00"),
+            )
+        self.assertFalse(result["eligible"])
+        self.assertIn("recovery drill is older than 90 days", result["blockers"])
+
+    def test_commit_mismatch_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = self._write_drill(root)
+            drill = json.loads(path.read_text(encoding="utf-8"))
+            drill["recovered_private_commit"] = "3" * 40
+            path.write_text(json.dumps(drill), encoding="utf-8")
+            result = evaluate_repository_recovery(
+                root=root,
+                at=datetime.fromisoformat("2026-09-01T09:00:00+09:00"),
+            )
+        self.assertFalse(result["eligible"])
+        self.assertIn("recovered private commit does not match source", result["blockers"])
 
 
 if __name__ == "__main__":
