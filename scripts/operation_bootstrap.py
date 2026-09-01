@@ -12,6 +12,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 try:
+    from scripts.live_gate_evidence import validate_promoted_evidence_bundle
     from scripts.operation_policy import policy_status
     from scripts.operation_state import (
         initialize_or_migrate_workspace,
@@ -22,6 +23,7 @@ try:
         validate_tracked_price_snapshot,
     )
 except ModuleNotFoundError:  # Direct execution from scripts/
+    from live_gate_evidence import validate_promoted_evidence_bundle
     from operation_policy import policy_status
     from operation_state import initialize_or_migrate_workspace, validate_workspace
     from price_snapshot import active_target_codes, validate_tracked_price_snapshot
@@ -105,6 +107,8 @@ def _live_evidence_failures(
             except ValueError:
                 # Policy validation reports the malformed timestamp separately.
                 pass
+    if policy.get("operation_mode") == "LIVE":
+        failures.extend(validate_promoted_evidence_bundle(root=root, policy=policy))
     return failures
 
 

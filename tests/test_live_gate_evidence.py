@@ -18,6 +18,10 @@ from scripts.live_gate_evidence import (
     evaluate_repository_recovery,
     evaluate_shadow_run,
     evaluate_v04_promotion,
+    evaluate_live_promotion,
+    apply_live_promotion,
+    validate_promoted_evidence_bundle,
+    LIVE_REQUIREMENT_EVIDENCE,
     write_private_evidence,
 )
 
@@ -768,6 +772,160 @@ class V04PromotionEvidenceTest(unittest.TestCase):
             result = evaluate_v04_promotion(root=root)
         self.assertFalse(result["eligible"])
         self.assertTrue(any("paper_duration_evidence is missing" in item for item in result["blockers"]))
+
+
+class FinalLivePromotionTest(unittest.TestCase):
+    def _write_bundle(self, root: Path) -> tuple[dict[str, dict], Path, Path]:
+        private = root / "operations/private"
+        policy = json.loads(
+            (Path(__file__).resolve().parents[1] / "operations/templates/operation-policy.json")
+            .read_text(encoding="utf-8")
+        )
+        policy_path = private / "operation-policy.json"
+        _write(policy_path, json.dumps(policy))
+        fresh = {}
+        for index, (gate, relative) in enumerate(LIVE_REQUIREMENT_EVIDENCE.items()):
+            evidence = {
+                "schema_version": "1.0",
+                "gate": gate,
+                "evaluated_at_jst": f"2026-09-01T08:{index:02d}:00+09:00",
+                "eligible": True,
+                "blockers": [],
+                "metrics": {"index": index},
+                "inputs": [
+                    {
+                        "role": "fixture",
+                        "path": f"fixture-{index}.json",
+                        "sha256": str(index) * 64,
+                    }
+                ],
+            }
+            fresh[gate] = evidence
+            _write(root / relative, json.dumps(evidence))
+        approval = {
+            "schema_version": "1.0",
+            "decision": "LIVE",
+            "rule_version": "v0.4",
+            "broker_submission": "HUMAN_ONLY",
+            "approved_by": "portfolio-owner",
+            "approved_at_jst": "2026-09-01T09:00:00+09:00",
+            "private_commit_reviewed": "1" * 40,
+            "public_submodule_commit_reviewed": "2" * 40,
+            "pre_promotion_policy_sha256": hashlib.sha256(
+                policy_path.read_bytes()
+            ).hexdigest(),
+            "evidence": {
+                gate: {
+                    "path": relative,
+                    "sha256": hashlib.sha256((root / relative).read_bytes()).hexdigest(),
+                }
+                for gate, relative in LIVE_REQUIREMENT_EVIDENCE.items()
+            },
+            "acknowledgements": {
+                name: True
+                for name in (
+                    "all_requirement_evidence_reviewed",
+                    "first_live_order_requires_pretrade_check",
+                    "human_only_submission",
+                    "pause_on_any_blocking_gap",
+                    "no_automatic_order_submission",
+                    "live_decision_is_not_a_profit_guarantee",
+                )
+            },
+        }
+        approval_path = private / "evidence/live-approval.json"
+        _write(approval_path, json.dumps(approval))
+        return fresh, approval_path, policy_path
+
+    @patch("scripts.live_gate_evidence.evaluate_all_live_requirements")
+    def test_all_bound_requirements_and_live_decision_are_eligible(self, evaluate) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fresh, approval_path, policy_path = self._write_bundle(root)
+            evaluate.return_value = fresh
+            result = evaluate_live_promotion(root=root)
+        self.assertTrue(result["eligible"], result["blockers"])
+        self.assertEqual(result["metrics"]["eligible_requirement_count"], 8)
+
+    @patch("scripts.live_gate_evidence.evaluate_all_live_requirements")
+    def test_tampered_stored_evidence_is_rejected(self, evaluate) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fresh, _, _ = self._write_bundle(root)
+            path = root / LIVE_REQUIREMENT_EVIDENCE["twenty_day_shadow_run"]
+            stored = json.loads(path.read_text(encoding="utf-8"))
+            stored["inputs"] = []
+            path.write_text(json.dumps(stored), encoding="utf-8")
+            evaluate.return_value = fresh
+            result = evaluate_live_promotion(root=root)
+        self.assertFalse(result["eligible"])
+        self.assertIn(
+            "stored evidence is stale or does not match: twenty_day_shadow_run",
+            result["blockers"],
+        )
+        self.assertIn(
+            "final approval evidence hash mismatch: twenty_day_shadow_run",
+            result["blockers"],
+        )
+
+    @patch("scripts.live_gate_evidence.evaluate_all_live_requirements")
+    def test_apply_atomically_promotes_policy_and_typed_bundle_remains_valid(self, evaluate) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fresh, approval_path, policy_path = self._write_bundle(root)
+            evaluate.return_value = fresh
+            result = evaluate_live_promotion(root=root)
+            promoted = apply_live_promotion(
+                root=root,
+                result=result,
+                approval_path=approval_path,
+                policy_path=policy_path,
+            )
+            persisted = json.loads(policy_path.read_text(encoding="utf-8"))
+            failures = validate_promoted_evidence_bundle(root=root, policy=persisted)
+        self.assertEqual(promoted["operation_mode"], "LIVE")
+        self.assertEqual(persisted["broker_submission"], "HUMAN_ONLY")
+        self.assertTrue(all(persisted["live_gates"].values()))
+        self.assertTrue(persisted["v04_holdout_promotion"])
+        self.assertEqual(failures, [])
+
+    def test_ineligible_result_cannot_mutate_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _, approval_path, policy_path = self._write_bundle(root)
+            before = policy_path.read_bytes()
+            with self.assertRaisesRegex(ValueError, "ineligible"):
+                apply_live_promotion(
+                    root=root,
+                    result={"eligible": False},
+                    approval_path=approval_path,
+                    policy_path=policy_path,
+                )
+            after = policy_path.read_bytes()
+        self.assertEqual(before, after)
+
+    @patch("scripts.live_gate_evidence.evaluate_all_live_requirements")
+    def test_bootstrap_bundle_rejects_tampered_final_acknowledgement(self, evaluate) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fresh, approval_path, policy_path = self._write_bundle(root)
+            evaluate.return_value = fresh
+            result = evaluate_live_promotion(root=root)
+            apply_live_promotion(
+                root=root,
+                result=result,
+                approval_path=approval_path,
+                policy_path=policy_path,
+            )
+            approval = json.loads(approval_path.read_text(encoding="utf-8"))
+            approval["acknowledgements"]["human_only_submission"] = False
+            approval_path.write_text(json.dumps(approval), encoding="utf-8")
+            policy = json.loads(policy_path.read_text(encoding="utf-8"))
+            failures = validate_promoted_evidence_bundle(root=root, policy=policy)
+        self.assertIn(
+            "typed LIVE approval acknowledgement is false: human_only_submission",
+            failures,
+        )
 
 
 if __name__ == "__main__":
