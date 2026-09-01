@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import tempfile
 from typing import Any
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 try:
@@ -30,6 +31,7 @@ PAPER_DURATION_GATE = "minimum_12_month_paper_trade"
 SHADOW_RUN_GATE = "twenty_day_shadow_run"
 OFFICIAL_COVERAGE_GATE = "official_source_coverage"
 REPOSITORY_RECOVERY_GATE = "private_repository_recovery"
+PERSONAL_RISK_GATE = "personal_risk_and_broker_check"
 OFFICIAL_SOURCE_NAMES = ("tdnet", "edinet", "company_ir", "jpx")
 OFFICIAL_SOURCE_ALIASES = {
     "tdnet": "tdnet",
@@ -1139,6 +1141,156 @@ def evaluate_repository_recovery(
     )
 
 
+def evaluate_personal_risk(
+    *,
+    root: Path = PROJECT_ROOT,
+    checklist_path: Path | None = None,
+    at: datetime | None = None,
+) -> dict[str, Any]:
+    """Validate the owner's private risk, tax, broker, and security checklist."""
+    root = root.resolve()
+    private_root = (root / "operations/private").resolve()
+    checklist_path = checklist_path or (
+        private_root / "evidence/personal-risk-and-broker.json"
+    )
+    blockers: list[str] = []
+    try:
+        checklist_path.resolve().relative_to(private_root / "evidence")
+    except ValueError:
+        blockers.append("personal checklist path must stay under private evidence")
+    if not checklist_path.is_file():
+        return _result(
+            gate=PERSONAL_RISK_GATE,
+            blockers=[*blockers, f"personal checklist is missing: {checklist_path}"],
+            metrics={},
+            inputs=[],
+        )
+    try:
+        checklist = _read_object(checklist_path)
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        return _result(
+            gate=PERSONAL_RISK_GATE,
+            blockers=[*blockers, f"personal checklist is invalid: {error}"],
+            metrics={},
+            inputs=[],
+        )
+    if checklist.get("schema_version") != "1.0":
+        blockers.append("personal checklist schema_version must be 1.0")
+    for field in ("owner", "broker_name"):
+        if not isinstance(checklist.get(field), str) or not checklist.get(
+            field, ""
+        ).strip():
+            blockers.append(f"personal checklist {field} is required")
+    reference_time = (at or datetime.now(tz=JST)).astimezone(JST)
+    reviewed: datetime | None = None
+    try:
+        reviewed = _parse_aware_datetime(checklist.get("reviewed_at_jst", ""))
+    except (TypeError, ValueError):
+        blockers.append("personal checklist reviewed_at_jst must include a UTC offset")
+    if reviewed:
+        if reviewed > reference_time:
+            blockers.append("personal checklist reviewed_at_jst cannot be in the future")
+        if (reference_time - reviewed).total_seconds() > 90 * 24 * 60 * 60:
+            blockers.append("personal risk and broker review is older than 90 days")
+
+    confirmations = checklist.get("confirmations")
+    if not isinstance(confirmations, dict):
+        confirmations = {}
+        blockers.append("personal checklist confirmations must be an object")
+    required_confirmations = (
+        "loss_does_not_affect_living",
+        "living_tax_and_five_year_funds_excluded",
+        "borrowed_funds_excluded",
+        "emergency_fund_separate",
+        "total_loss_stop_documented",
+        "tax_residency_and_account_type_checked",
+        "fees_tax_and_filing_obligations_checked",
+        "cash_equity_and_trading_unit_checked",
+        "limit_order_tick_and_validity_checked",
+        "broker_rules_checked_from_official_source",
+        "available_for_0845_0855_manual_check",
+        "broker_submission_human_only",
+        "no_automatic_broker_api",
+        "correct_broker_url_bookmarked",
+        "mfa_or_passkey_enabled",
+        "login_and_trade_notifications_enabled",
+        "phishing_and_account_lockout_procedure_checked",
+        "emergency_cancel_and_pause_procedure_checked",
+        "investment_can_lose_all_allocated_capital",
+        "returns_are_not_guaranteed",
+    )
+    for name in required_confirmations:
+        if confirmations.get(name) is not True:
+            blockers.append(f"personal confirmation {name} must be true")
+
+    limits = checklist.get("risk_limits_pct")
+    if not isinstance(limits, dict):
+        limits = {}
+        blockers.append("personal checklist risk_limits_pct must be an object")
+    limit_caps = {
+        "maximum_total_loss_stop": 100.0,
+        "maximum_single_name": 10.0,
+        "maximum_industry": 20.0,
+        "maximum_initial_purchase": 5.0,
+        "maximum_additional_purchase": 2.5,
+        "maximum_daily_participation": 10.0,
+    }
+    for name, cap in limit_caps.items():
+        value = limits.get(name)
+        if (
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or not math.isfinite(value)
+            or value <= 0
+            or value > cap
+        ):
+            blockers.append(f"personal risk limit {name} must be > 0 and <= {cap:g}")
+
+    rules_url = checklist.get("broker_rules_url")
+    if not isinstance(rules_url, str) or urlparse(rules_url).scheme != "https":
+        blockers.append("broker_rules_url must be an HTTPS official page")
+    try:
+        rules_checked = _parse_aware_datetime(
+            checklist.get("broker_rules_checked_at_jst", "")
+        )
+    except (TypeError, ValueError):
+        rules_checked = None
+        blockers.append("broker_rules_checked_at_jst must include a UTC offset")
+    if rules_checked and reviewed and rules_checked.date() != reviewed.date():
+        blockers.append("broker rules must be checked on the review date")
+    if not isinstance(checklist.get("emergency_contact_location"), str) or not checklist.get(
+        "emergency_contact_location", ""
+    ).strip():
+        blockers.append("emergency_contact_location is required")
+    if not isinstance(checklist.get("review_notes"), str) or not checklist.get(
+        "review_notes", ""
+    ).strip():
+        blockers.append("personal checklist review_notes is required")
+
+    return _result(
+        gate=PERSONAL_RISK_GATE,
+        blockers=blockers,
+        metrics={
+            "reviewed_at_jst": reviewed.isoformat(timespec="seconds")
+            if reviewed
+            else None,
+            "age_days": (reference_time - reviewed).days if reviewed else None,
+            "confirmation_count": len(required_confirmations),
+            "confirmed_count": sum(
+                confirmations.get(name) is True for name in required_confirmations
+            ),
+            "risk_limits_pct": limits,
+        },
+        inputs=[
+            {
+                "role": "personal_risk_and_broker_checklist",
+                "path": "operations/private/evidence/personal-risk-and-broker.json",
+                "sha256": _sha256(checklist_path),
+            }
+        ],
+    )
+
+
 def write_private_evidence(*, root: Path, path: Path, result: dict[str, Any]) -> None:
     """Write only successful evidence, and only below operations/private/evidence."""
     if result.get("eligible") is not True:
@@ -1196,6 +1348,12 @@ def _build_parser() -> argparse.ArgumentParser:
     recovery.add_argument("--drill", type=Path)
     recovery.add_argument("--at", type=str)
     recovery.add_argument("--write-evidence", type=Path)
+    personal = subparsers.add_parser(
+        "personal-risk", help="validate the owner's risk and broker checklist"
+    )
+    personal.add_argument("--checklist", type=Path)
+    personal.add_argument("--at", type=str)
+    personal.add_argument("--write-evidence", type=Path)
     return parser
 
 
@@ -1231,6 +1389,12 @@ def main(argv: list[str] | None = None) -> int:
         result = evaluate_repository_recovery(
             root=args.root,
             drill_path=args.drill,
+            at=_parse_aware_datetime(args.at) if args.at else None,
+        )
+    elif args.command == "personal-risk":
+        result = evaluate_personal_risk(
+            root=args.root,
+            checklist_path=args.checklist,
             at=_parse_aware_datetime(args.at) if args.at else None,
         )
     else:  # pragma: no cover - argparse prevents this branch

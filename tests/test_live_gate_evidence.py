@@ -13,6 +13,7 @@ from scripts.live_gate_evidence import (
     evaluate_historical_replay,
     evaluate_official_coverage,
     evaluate_paper_duration,
+    evaluate_personal_risk,
     evaluate_point_in_time,
     evaluate_repository_recovery,
     evaluate_shadow_run,
@@ -553,6 +554,98 @@ class RepositoryRecoveryEvidenceTest(unittest.TestCase):
             )
         self.assertFalse(result["eligible"])
         self.assertIn("recovered private commit does not match source", result["blockers"])
+
+
+class PersonalRiskEvidenceTest(unittest.TestCase):
+    def _write_checklist(self, root: Path) -> Path:
+        confirmations = {
+            name: True
+            for name in (
+                "loss_does_not_affect_living",
+                "living_tax_and_five_year_funds_excluded",
+                "borrowed_funds_excluded",
+                "emergency_fund_separate",
+                "total_loss_stop_documented",
+                "tax_residency_and_account_type_checked",
+                "fees_tax_and_filing_obligations_checked",
+                "cash_equity_and_trading_unit_checked",
+                "limit_order_tick_and_validity_checked",
+                "broker_rules_checked_from_official_source",
+                "available_for_0845_0855_manual_check",
+                "broker_submission_human_only",
+                "no_automatic_broker_api",
+                "correct_broker_url_bookmarked",
+                "mfa_or_passkey_enabled",
+                "login_and_trade_notifications_enabled",
+                "phishing_and_account_lockout_procedure_checked",
+                "emergency_cancel_and_pause_procedure_checked",
+                "investment_can_lose_all_allocated_capital",
+                "returns_are_not_guaranteed",
+            )
+        }
+        checklist = {
+            "schema_version": "1.0",
+            "owner": "portfolio-owner",
+            "reviewed_at_jst": "2026-09-01T08:00:00+09:00",
+            "broker_name": "sample broker",
+            "broker_rules_url": "https://broker.example/rules",
+            "broker_rules_checked_at_jst": "2026-09-01T07:30:00+09:00",
+            "confirmations": confirmations,
+            "risk_limits_pct": {
+                "maximum_total_loss_stop": 25.0,
+                "maximum_single_name": 10.0,
+                "maximum_industry": 20.0,
+                "maximum_initial_purchase": 5.0,
+                "maximum_additional_purchase": 2.5,
+                "maximum_daily_participation": 10.0,
+            },
+            "emergency_contact_location": "offline emergency runbook",
+            "review_notes": "broker and tax conditions reviewed",
+        }
+        path = root / "operations/private/evidence/personal-risk-and-broker.json"
+        _write(path, json.dumps(checklist))
+        return path
+
+    def test_complete_recent_personal_review_is_eligible(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_checklist(root)
+            result = evaluate_personal_risk(
+                root=root,
+                at=datetime.fromisoformat("2026-09-01T09:00:00+09:00"),
+            )
+        self.assertTrue(result["eligible"], result["blockers"])
+        self.assertEqual(result["metrics"]["confirmed_count"], 20)
+
+    def test_personal_review_expires_after_90_days(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_checklist(root)
+            result = evaluate_personal_risk(
+                root=root,
+                at=datetime.fromisoformat("2026-12-15T09:00:00+09:00"),
+            )
+        self.assertFalse(result["eligible"])
+        self.assertIn(
+            "personal risk and broker review is older than 90 days", result["blockers"]
+        )
+
+    def test_strategy_cap_cannot_be_relaxed_in_personal_checklist(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = self._write_checklist(root)
+            checklist = json.loads(path.read_text(encoding="utf-8"))
+            checklist["risk_limits_pct"]["maximum_single_name"] = 15.0
+            path.write_text(json.dumps(checklist), encoding="utf-8")
+            result = evaluate_personal_risk(
+                root=root,
+                at=datetime.fromisoformat("2026-09-01T09:00:00+09:00"),
+            )
+        self.assertFalse(result["eligible"])
+        self.assertIn(
+            "personal risk limit maximum_single_name must be > 0 and <= 10",
+            result["blockers"],
+        )
 
 
 if __name__ == "__main__":
