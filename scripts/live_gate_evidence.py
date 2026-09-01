@@ -28,6 +28,16 @@ POINT_IN_TIME_GATE = "point_in_time_full_universe_validation"
 HISTORICAL_REPLAY_GATE = "historical_replay_2025_2026_accepted"
 PAPER_DURATION_GATE = "minimum_12_month_paper_trade"
 SHADOW_RUN_GATE = "twenty_day_shadow_run"
+OFFICIAL_COVERAGE_GATE = "official_source_coverage"
+OFFICIAL_SOURCE_NAMES = ("tdnet", "edinet", "company_ir", "jpx")
+OFFICIAL_SOURCE_ALIASES = {
+    "tdnet": "tdnet",
+    "edinet": "edinet",
+    "company_ir": "company_ir",
+    "ir": "company_ir",
+    "jpx": "jpx",
+    "jpx_notice": "jpx",
+}
 
 
 def _read_object(path: Path) -> dict[str, Any]:
@@ -803,6 +813,206 @@ def evaluate_shadow_run(
     )
 
 
+def evaluate_official_coverage(
+    *, root: Path = PROJECT_ROOT, history_path: Path | None = None
+) -> dict[str, Any]:
+    """Validate official-source evidence for every run in the 20-day window."""
+    root = root.resolve()
+    private_root = (root / "operations/private").resolve()
+    history_path = history_path or (private_root / "run-history.csv")
+    blockers: list[str] = []
+    shadow = evaluate_shadow_run(root=root, history_path=history_path)
+    if not shadow["eligible"]:
+        blockers.append("20-day shadow run is not eligible")
+    if not history_path.is_file():
+        return _result(
+            gate=OFFICIAL_COVERAGE_GATE,
+            blockers=[*blockers, f"run history is missing: {history_path}"],
+            metrics={},
+            inputs=[],
+        )
+    with history_path.open(encoding="utf-8", newline="") as source:
+        rows = list(csv.DictReader(source))
+    latest: dict[str, tuple[int, dict[str, str]]] = {}
+    for row in rows:
+        run_id = row.get("run_id", "").strip()
+        try:
+            attempt = int(row.get("attempt", ""))
+        except ValueError:
+            continue
+        if not run_id:
+            continue
+        if run_id not in latest or attempt > latest[run_id][0]:
+            latest[run_id] = (attempt, row)
+    completed = [
+        row
+        for _, row in latest.values()
+        if row.get("status", "").strip() == "COMPLETED"
+        and row.get("operation_mode", "").strip() == "PAPER"
+        and row.get("active_rule_version", "").strip() == "v0.4"
+    ]
+    completed.sort(key=lambda row: row.get("price_date", ""))
+    selected = completed[-20:]
+    if len(selected) != 20:
+        blockers.append("official coverage requires exactly 20 completed shadow runs")
+
+    inputs = [
+        {
+            "role": "run_history",
+            "path": "operations/private/run-history.csv",
+            "sha256": _sha256(history_path),
+        }
+    ]
+    checked_counts = {name: 0 for name in OFFICIAL_SOURCE_NAMES}
+    live_network_count = 0
+    latest_cutoffs: dict[str, datetime] = {}
+    for row in selected:
+        run_id = row.get("run_id", "").strip()
+        run_dir = private_root / "runs" / run_id
+        coverage_path = run_dir / "coverage.json"
+        health_path = run_dir / "provider-health.json"
+        sources_path = run_dir / "sources.csv"
+        for path in (coverage_path, health_path, sources_path):
+            if not path.is_file():
+                blockers.append(f"official coverage artifact is missing: {run_id}/{path.name}")
+        if not all(path.is_file() for path in (coverage_path, health_path, sources_path)):
+            continue
+        try:
+            coverage = _read_object(coverage_path)
+            health = _read_object(health_path)
+            with sources_path.open(encoding="utf-8", newline="") as source:
+                source_rows = list(csv.DictReader(source))
+        except (OSError, ValueError, json.JSONDecodeError, csv.Error) as error:
+            blockers.append(f"official coverage artifacts are invalid for {run_id}: {error}")
+            continue
+        if coverage.get("run_id") != run_id or coverage.get("status") != "COMPLETED":
+            blockers.append(f"coverage is not completed for {run_id}")
+        if coverage.get("data_gaps") not in ([], None):
+            unresolved = [
+                gap
+                for gap in coverage.get("data_gaps", [])
+                if not isinstance(gap, dict)
+                or str(gap.get("status", "OPEN")).upper() != "RESOLVED"
+            ]
+            if unresolved:
+                blockers.append(f"coverage has unresolved data gaps for {run_id}")
+        if health.get("run_id") != run_id:
+            blockers.append(f"provider-health run_id mismatch for {run_id}")
+        if health.get("input_mode") != "LIVE_NETWORK":
+            blockers.append(f"provider-health is not a live network scan for {run_id}")
+        else:
+            live_network_count += 1
+        if health.get("status") not in {"COMPLETED", "PARTIAL"}:
+            blockers.append(f"provider-health has not completed for {run_id}")
+        edinet_provider = health.get("providers", {}).get("edinet", {})
+        if edinet_provider.get("status") != "OK" or not isinstance(
+            edinet_provider.get("request_count"), int
+        ) or edinet_provider.get("request_count", 0) < 1:
+            blockers.append(f"EDINET network scan is incomplete for {run_id}")
+
+        by_category: dict[str, list[dict[str, str]]] = {
+            name: [] for name in OFFICIAL_SOURCE_NAMES
+        }
+        for source_row in source_rows:
+            category = source_row.get("category", "").strip().lower().replace("-", "_")
+            normalized = OFFICIAL_SOURCE_ALIASES.get(category, category)
+            if normalized in by_category:
+                by_category[normalized].append(source_row)
+            if (
+                source_row.get("used_for_decision", "").strip().lower()
+                in {"true", "1"}
+                and normalized in by_category
+                and source_row.get("primary_source", "").strip().lower()
+                not in {"true", "1"}
+            ):
+                blockers.append(
+                    f"decision used a non-primary {normalized} source for {run_id}"
+                )
+        official = coverage.get("official_sources")
+        if not isinstance(official, dict):
+            blockers.append(f"official_sources is missing for {run_id}")
+            official = {}
+        for name in OFFICIAL_SOURCE_NAMES:
+            item = official.get(name, {})
+            required = item.get("required") is True
+            source_status = item.get("status")
+            if required and source_status != "CHECKED":
+                blockers.append(f"required source {name} is not CHECKED for {run_id}")
+                continue
+            if not required and source_status not in {"CHECKED", "NOT_APPLICABLE"}:
+                blockers.append(
+                    f"optional source {name} is not terminal for {run_id}"
+                )
+                continue
+            if source_status == "CHECKED":
+                checked_counts[name] += 1
+                if not by_category[name]:
+                    blockers.append(f"source {name} has no evidence row for {run_id}")
+                elif not any(
+                    evidence.get("primary_source", "").strip().lower()
+                    in {"true", "1"}
+                    for evidence in by_category[name]
+                ):
+                    blockers.append(f"source {name} has no primary evidence for {run_id}")
+        try:
+            cutoff = _parse_aware_datetime(row.get("source_cutoff_jst", ""))
+        except ValueError:
+            blockers.append(f"source cutoff is invalid for {run_id}")
+        else:
+            for name in OFFICIAL_SOURCE_NAMES:
+                if official.get(name, {}).get("status") == "CHECKED":
+                    latest_cutoffs[name] = max(cutoff, latest_cutoffs.get(name, cutoff))
+        inputs.extend(
+            {
+                "role": role,
+                "path": f"operations/private/runs/{run_id}/{path.name}",
+                "sha256": _sha256(path),
+            }
+            for role, path in (
+                ("coverage", coverage_path),
+                ("provider_health", health_path),
+                ("sources", sources_path),
+            )
+        )
+
+    watermarks_path = private_root / "source-watermarks.json"
+    if not watermarks_path.is_file():
+        blockers.append("source-watermarks.json is missing")
+    else:
+        try:
+            watermarks = _read_object(watermarks_path).get("sources", {})
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            blockers.append(f"source-watermarks.json is invalid: {error}")
+            watermarks = {}
+        for name, cutoff in latest_cutoffs.items():
+            value = watermarks.get(name, {}).get("last_successful_cutoff_jst")
+            try:
+                watermark = _parse_aware_datetime(value)
+            except (TypeError, ValueError):
+                blockers.append(f"source watermark is missing or invalid: {name}")
+                continue
+            if watermark < cutoff:
+                blockers.append(f"source watermark is behind the shadow window: {name}")
+        inputs.append(
+            {
+                "role": "source_watermarks",
+                "path": "operations/private/source-watermarks.json",
+                "sha256": _sha256(watermarks_path),
+            }
+        )
+
+    return _result(
+        gate=OFFICIAL_COVERAGE_GATE,
+        blockers=blockers,
+        metrics={
+            "run_count": len(selected),
+            "live_network_run_count": live_network_count,
+            "checked_run_counts": checked_counts,
+        },
+        inputs=inputs,
+    )
+
+
 def write_private_evidence(*, root: Path, path: Path, result: dict[str, Any]) -> None:
     """Write only successful evidence, and only below operations/private/evidence."""
     if result.get("eligible") is not True:
@@ -849,6 +1059,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     shadow.add_argument("--history", type=Path)
     shadow.add_argument("--write-evidence", type=Path)
+    coverage = subparsers.add_parser(
+        "official-coverage", help="validate official sources across the shadow window"
+    )
+    coverage.add_argument("--history", type=Path)
+    coverage.add_argument("--write-evidence", type=Path)
     return parser
 
 
@@ -872,6 +1087,11 @@ def main(argv: list[str] | None = None) -> int:
         )
     elif args.command == "shadow-run":
         result = evaluate_shadow_run(
+            root=args.root,
+            history_path=args.history,
+        )
+    elif args.command == "official-coverage":
+        result = evaluate_official_coverage(
             root=args.root,
             history_path=args.history,
         )

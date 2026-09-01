@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from scripts.live_gate_evidence import (
     evaluate_historical_replay,
+    evaluate_official_coverage,
     evaluate_paper_duration,
     evaluate_point_in_time,
     evaluate_shadow_run,
@@ -386,6 +387,98 @@ class ShadowRunEvidenceTest(unittest.TestCase):
         self.assertIn(
             "duplicate ticket_id across shadow runs: DUPLICATE", result["blockers"]
         )
+
+
+class OfficialCoverageEvidenceTest(unittest.TestCase):
+    def _write_coverage(self, root: Path) -> list[str]:
+        history = ShadowRunEvidenceTest()._write_shadow(root)
+        with history.open(encoding="utf-8", newline="") as source:
+            rows = list(csv.DictReader(source))
+        for row in rows:
+            run_id = row["run_id"]
+            run_dir = root / f"operations/private/runs/{run_id}"
+            coverage = {
+                "schema_version": "1.0",
+                "run_id": run_id,
+                "status": "COMPLETED",
+                "official_sources": {
+                    "tdnet": {"required": True, "status": "CHECKED"},
+                    "edinet": {"required": True, "status": "CHECKED"},
+                    "company_ir": {"required": False, "status": "NOT_APPLICABLE"},
+                    "jpx": {"required": True, "status": "CHECKED"},
+                },
+                "data_gaps": [],
+            }
+            health = {
+                "schema_version": "1.0",
+                "run_id": run_id,
+                "input_mode": "LIVE_NETWORK",
+                "status": "COMPLETED",
+                "providers": {
+                    "edinet": {"status": "OK", "request_count": 1}
+                },
+                "blocking_gaps": [],
+            }
+            _write(run_dir / "coverage.json", json.dumps(coverage))
+            _write(run_dir / "provider-health.json", json.dumps(health))
+            _write(
+                run_dir / "sources.csv",
+                "source_id,category,primary_source,used_for_decision,url\n"
+                "tdnet-check,tdnet,true,true,https://www.release.tdnet.info/\n"
+                "edinet-check,edinet,true,true,https://api.edinet-fsa.go.jp/\n"
+                "jpx-check,jpx,true,true,https://www.jpx.co.jp/\n",
+            )
+        latest_cutoff = rows[-1]["source_cutoff_jst"]
+        watermarks = {
+            "sources": {
+                name: {"last_successful_cutoff_jst": latest_cutoff}
+                for name in ("tdnet", "edinet", "jpx")
+            }
+        }
+        _write(
+            root / "operations/private/source-watermarks.json",
+            json.dumps(watermarks),
+        )
+        return [row["run_id"] for row in rows]
+
+    @patch("scripts.live_gate_evidence.evaluate_shadow_run")
+    def test_20_live_network_official_checks_are_eligible(self, shadow) -> None:
+        shadow.return_value = {"eligible": True}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_coverage(root)
+            result = evaluate_official_coverage(root=root)
+        self.assertTrue(result["eligible"], result["blockers"])
+        self.assertEqual(result["metrics"]["checked_run_counts"]["edinet"], 20)
+
+    @patch("scripts.live_gate_evidence.evaluate_shadow_run")
+    def test_fixture_scan_is_rejected(self, shadow) -> None:
+        shadow.return_value = {"eligible": True}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_ids = self._write_coverage(root)
+            path = root / f"operations/private/runs/{run_ids[-1]}/provider-health.json"
+            health = json.loads(path.read_text(encoding="utf-8"))
+            health["input_mode"] = "FIXTURE"
+            path.write_text(json.dumps(health), encoding="utf-8")
+            result = evaluate_official_coverage(root=root)
+        self.assertFalse(result["eligible"])
+        self.assertTrue(any("not a live network scan" in item for item in result["blockers"]))
+
+    @patch("scripts.live_gate_evidence.evaluate_shadow_run")
+    def test_non_primary_decision_source_is_rejected(self, shadow) -> None:
+        shadow.return_value = {"eligible": True}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_ids = self._write_coverage(root)
+            path = root / f"operations/private/runs/{run_ids[-1]}/sources.csv"
+            text = path.read_text(encoding="utf-8").replace(
+                "tdnet-check,tdnet,true,true", "tdnet-check,tdnet,false,true"
+            )
+            path.write_text(text, encoding="utf-8")
+            result = evaluate_official_coverage(root=root)
+        self.assertFalse(result["eligible"])
+        self.assertTrue(any("non-primary tdnet" in item for item in result["blockers"]))
 
 
 if __name__ == "__main__":
