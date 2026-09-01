@@ -29,6 +29,7 @@ HISTORICAL_REPLAY_GATE = "historical_replay_2025_2026_accepted"
 PAPER_DURATION_GATE = "minimum_12_month_paper_trade"
 SHADOW_RUN_GATE = "twenty_day_shadow_run"
 OFFICIAL_COVERAGE_GATE = "official_source_coverage"
+REPOSITORY_RECOVERY_GATE = "private_repository_recovery"
 OFFICIAL_SOURCE_NAMES = ("tdnet", "edinet", "company_ir", "jpx")
 OFFICIAL_SOURCE_ALIASES = {
     "tdnet": "tdnet",
@@ -1013,6 +1014,131 @@ def evaluate_official_coverage(
     )
 
 
+def evaluate_repository_recovery(
+    *,
+    root: Path = PROJECT_ROOT,
+    drill_path: Path | None = None,
+    at: datetime | None = None,
+) -> dict[str, Any]:
+    """Validate a recent clean-clone and mirror recovery drill."""
+    root = root.resolve()
+    private_root = (root / "operations/private").resolve()
+    drill_path = drill_path or (private_root / "evidence/recovery-drill.json")
+    blockers: list[str] = []
+    try:
+        drill_path.resolve().relative_to(private_root / "evidence")
+    except ValueError:
+        blockers.append("recovery drill path must stay under private evidence")
+    if not drill_path.is_file():
+        return _result(
+            gate=REPOSITORY_RECOVERY_GATE,
+            blockers=[*blockers, f"recovery drill is missing: {drill_path}"],
+            metrics={},
+            inputs=[],
+        )
+    try:
+        drill = _read_object(drill_path)
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        return _result(
+            gate=REPOSITORY_RECOVERY_GATE,
+            blockers=[*blockers, f"recovery drill is invalid: {error}"],
+            metrics={},
+            inputs=[],
+        )
+    if drill.get("schema_version") != "1.0":
+        blockers.append("recovery drill schema_version must be 1.0")
+    if not isinstance(drill.get("drill_id"), str) or not drill.get(
+        "drill_id", ""
+    ).strip():
+        blockers.append("recovery drill_id is required")
+    if not isinstance(drill.get("operator"), str) or not drill.get(
+        "operator", ""
+    ).strip():
+        blockers.append("recovery operator is required")
+    if drill.get("repository_visibility") != "PRIVATE":
+        blockers.append("repository_visibility must be PRIVATE")
+
+    started: datetime | None = None
+    completed: datetime | None = None
+    try:
+        started = _parse_aware_datetime(drill.get("started_at_jst", ""))
+        completed = _parse_aware_datetime(drill.get("completed_at_jst", ""))
+    except (TypeError, ValueError):
+        blockers.append("recovery timestamps must include UTC offsets")
+    reference_time = (at or datetime.now(tz=JST)).astimezone(JST)
+    if started and completed:
+        if completed < started:
+            blockers.append("recovery completed_at_jst cannot precede started_at_jst")
+        if completed > reference_time:
+            blockers.append("recovery completed_at_jst cannot be in the future")
+        if (completed - started).total_seconds() > 24 * 60 * 60:
+            blockers.append("recovery drill duration exceeds 24 hours")
+        if (reference_time - completed).total_seconds() > 90 * 24 * 60 * 60:
+            blockers.append("recovery drill is older than 90 days")
+
+    source_commit = drill.get("source_private_commit")
+    recovered_commit = drill.get("recovered_private_commit")
+    source_public = drill.get("source_public_submodule_commit")
+    recovered_public = drill.get("recovered_public_submodule_commit")
+    for name, value in (
+        ("source_private_commit", source_commit),
+        ("recovered_private_commit", recovered_commit),
+        ("source_public_submodule_commit", source_public),
+        ("recovered_public_submodule_commit", recovered_public),
+    ):
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{40}", value):
+            blockers.append(f"recovery {name} must be a full commit SHA")
+    if source_commit != recovered_commit:
+        blockers.append("recovered private commit does not match source")
+    if source_public != recovered_public:
+        blockers.append("recovered public submodule commit does not match source")
+
+    checks = drill.get("checks")
+    if not isinstance(checks, dict):
+        checks = {}
+        blockers.append("recovery checks must be an object")
+    required_checks = (
+        "clean_clone_with_submodules",
+        "workspace_setup",
+        "state_validation",
+        "paper_bootstrap_check",
+        "latest_successful_run",
+        "latest_handoff",
+        "all_ledgers",
+        "unreconciled_orders",
+        "private_remote_restore",
+        "access_controlled_mirror_restore",
+    )
+    for name in required_checks:
+        if checks.get(name) is not True:
+            blockers.append(f"recovery check {name} must be true")
+    if not isinstance(drill.get("result_notes"), str) or not drill.get(
+        "result_notes", ""
+    ).strip():
+        blockers.append("recovery result_notes is required")
+
+    return _result(
+        gate=REPOSITORY_RECOVERY_GATE,
+        blockers=blockers,
+        metrics={
+            "drill_id": drill.get("drill_id"),
+            "completed_at_jst": completed.isoformat(timespec="seconds")
+            if completed
+            else None,
+            "age_days": (reference_time - completed).days if completed else None,
+            "required_check_count": len(required_checks),
+            "passed_check_count": sum(checks.get(name) is True for name in required_checks),
+        },
+        inputs=[
+            {
+                "role": "recovery_drill",
+                "path": "operations/private/evidence/recovery-drill.json",
+                "sha256": _sha256(drill_path),
+            }
+        ],
+    )
+
+
 def write_private_evidence(*, root: Path, path: Path, result: dict[str, Any]) -> None:
     """Write only successful evidence, and only below operations/private/evidence."""
     if result.get("eligible") is not True:
@@ -1064,6 +1190,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     coverage.add_argument("--history", type=Path)
     coverage.add_argument("--write-evidence", type=Path)
+    recovery = subparsers.add_parser(
+        "repository-recovery", help="validate a recent private recovery drill"
+    )
+    recovery.add_argument("--drill", type=Path)
+    recovery.add_argument("--at", type=str)
+    recovery.add_argument("--write-evidence", type=Path)
     return parser
 
 
@@ -1094,6 +1226,12 @@ def main(argv: list[str] | None = None) -> int:
         result = evaluate_official_coverage(
             root=args.root,
             history_path=args.history,
+        )
+    elif args.command == "repository-recovery":
+        result = evaluate_repository_recovery(
+            root=args.root,
+            drill_path=args.drill,
+            at=_parse_aware_datetime(args.at) if args.at else None,
         )
     else:  # pragma: no cover - argparse prevents this branch
         raise AssertionError(args.command)

@@ -79,3 +79,17 @@ stock.jp/.venv/bin/python stock.jp/scripts/live_gate_evidence.py \
 EDINET は各日 `LIVE_NETWORK` で1 request 以上成功していなければならず、fixture 実行は算入しない。TDnet、EDINET、JPXと、対象銘柄がある日の会社IRが `CHECKED` で、対応する一次資料行が存在することを要求する。判断に使用した公式カテゴリの行が二次資料なら失敗する。解消していない data gap と、shadow window より古い source watermark も拒否する。
 
 公開株価 archive は再現用の二次データであり、この判定だけで注文価格の公式確認を代替しない。対象銘柄の価格、corporate action、会社IRは各 run の一次資料証跡へ残す。
+
+## private repository 復旧
+
+`private_repository_recovery` は、通常の private remote とアクセス制御された mirror の両方から復旧できた記録を検証する。公開テンプレート `operations/templates/live-gate-evidence/recovery-drill-template.json` を private の `operations/private/evidence/recovery-drill.json` へコピーし、実施結果を記入する。
+
+~~~bash
+stock.jp/.venv/bin/python stock.jp/scripts/live_gate_evidence.py \
+  --root stock.jp repository-recovery \
+  --write-evidence stock.jp/operations/private/evidence/repository-recovery.json
+~~~
+
+clean clone、submodule、workspace setup、state と bootstrap、最新成功 run と handoff、全台帳、未照合注文を照合する。復旧した private commit と public submodule commit は元の40桁SHAと一致しなければならない。通常 remote と mirror の両方の復旧を要求する。
+
+復旧訓練は90日で失効する。稼働中 checkout を訓練先にせず、一時ディレクトリを使う。repository URL、credential、口座情報は証跡へ記載しない。
