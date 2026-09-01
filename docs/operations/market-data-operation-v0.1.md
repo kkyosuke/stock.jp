@@ -33,7 +33,7 @@ Yahoo Financeは公式または契約APIではなく、候補探索とPAPERの�
 1. JPX月次一覧から現行内国株式を取得
 2. Yahoo chart APIを複数workerで取得
 3. fetch成功率が98%未満ならtracked dataを変更せず失敗
-4. archive、全test、compile、20日smokeを検証
+4. 取得エラー0件、lookback内の変更、archive、全test、compile、20日smokeを検証
 5. 日付別CSVと`latest.json`を更新するPRを作成し、成功時だけsquash auto-merge
 
 失敗したPRやworkflowは自動mergeせず、人が`fetch.error_count`、最新日の`quote_count / universe.count`、意図しない過去日の変更を確認する。成功時はauto-mergeし、翌朝private repositoryのsubmodule更新workflowが最新`main`を取り込む。更新PRが未マージまたはlocal checkoutが古い場合、鮮度ゲートが夜間runを停止する。

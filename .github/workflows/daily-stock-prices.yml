@@ -54,7 +54,12 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Validate generated archive
+        env:
+          LOOKBACK_DAYS: ${{ inputs.lookback_days || '7' }}
         run: |
+          python scripts/validate_scheduled_price_update.py \
+            --summary .cache/daily-price-summary.json \
+            --lookback-days "$LOOKBACK_DAYS"
           python scripts/validate_daily_price_archive.py \
             --archive data/daily-prices \
             --source-label "scheduled Yahoo Finance archive" \

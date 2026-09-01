@@ -19,6 +19,7 @@ class DailyStockPriceWorkflowTest(unittest.TestCase):
         pull_request = self.text.index("- name: Create or update data pull request")
         self.assertLess(validation, tests)
         self.assertLess(tests, pull_request)
+        self.assertIn("validate_scheduled_price_update.py", self.text)
         self.assertIn("python -m unittest discover -s tests -v", self.text)
         self.assertIn("python -m compileall -q scripts tests", self.text)
         self.assertIn("broker_orders_submitted", (ROOT / "scripts/operation_smoke.py").read_text())

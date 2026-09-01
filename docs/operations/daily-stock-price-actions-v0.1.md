@@ -36,9 +36,11 @@ GitHub App tokenをActions secret `PR_TOKEN`へ登録する。
 
 全リクエストの98%未満しか成功しなければ、広域障害やアクセス制限とみなして追跡データを
 変更せず失敗する。98%以上なら個別エラーを`FETCH_ERROR`として残し、PRで確認できる。
-収集後にarchive schema、checksum、全回帰test、Python compile、20日operation smokeを
-同じjobで実行する。いずれかが失敗した場合はPRを作成・mergeしない。すべて成功し、差分が
-ある場合だけPRを作成し、`--auto --squash`でmergeする。差分がない日は何もしない。
+通常の無人mergeでは取得エラー0件、最新sessionの件数一致、変更CSVが指定lookback内である
+ことも要求する。収集後にarchive schema、checksum、全回帰test、Python compile、20日
+operation smokeを同じjobで実行する。いずれかが失敗した場合はPRを作成・mergeしない。
+すべて成功し、差分がある場合だけPRを作成し、`--auto --squash`でmergeする。差分がない日は
+何もしない。
 
 標準`GITHUB_TOKEN`で作成したPRは再帰的なworkflow起動を抑止されることがあるため、
 merge前検証を収集workflow内に置く。`PR_TOKEN`を設定して通常のPR checkが起動する場合は、
