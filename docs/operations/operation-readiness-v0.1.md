@@ -61,9 +61,9 @@ PAPER の機械ゲートは、状態 schema、運用 policy、マージ済み株
 
 未照合注文、検証失敗、push 失敗がある間は次の注文候補を増やさない。強制 push や履歴改変はしない。
 
-## 5. clean-clone 復旧訓練
+## 5. clean-clone 確認
 
-四半期ごと、LIVE 昇格前、状態 schema の変更前に、別ディレクトリへの clean clone で復旧を確認する。
+LIVE 昇格前に一度、別ディレクトリへの clean clone で現行構成を再現できることを確認する。setup、submodule、状態 schema、台帳構成を変更した場合は `REPOSITORY_LAYOUT_REVISION` を上げ、変更後に再確認する。日次run、データ更新、単なる経過日数では再確認しない。
 
 ~~~bash
 git clone --recurse-submodules <private-repository-url> <new-directory>
@@ -73,13 +73,13 @@ stock.jp/.venv/bin/python stock.jp/scripts/operation_state.py validate
 stock.jp/.venv/bin/python stock.jp/scripts/operation_bootstrap.py check
 ~~~
 
-稼働中の checkout は上書きしない。最新 `state.json`、成功 run、handoff、全台帳、未照合注文、private commit、public submodule commit を照合し、結果を private 側の LIVE gate evidence に記録する。アクセス制御された repository mirror からも同じ復旧ができることを LIVE 前に確認する。
+稼働中の checkout は上書きしない。最新 `state.json`、成功 run、handoff、全台帳、未照合注文、private commit、public submodule commit を照合し、結果を private 側の LIVE gate evidence に記録する。別媒体の mirror は要求しない。GitHub を利用できない間は新しい注文を止め、復旧後に状態を再検証する。
 
 ## 6. CI
 
 `.github/workflows/operation-tests.yml` は PR と main 更新時に、全単体テスト、Python compile、skill 構成、20営業日 simulation を実行する。CI は公開 fixture だけを使い、API key や `operations/private/` をアップロードしない。
 
-CI 成功は実情報源の疎通や投資成績を保証しない。初回チェック、夜間 report のデータ欠損、定期的な復旧訓練を併用する。
+CI 成功は実情報源の疎通や投資成績を保証しない。初回チェック、夜間 report のデータ欠損、現行構成の clean-clone 確認を併用する。
 
 ## 7. 継続運用の最小周期
 
@@ -89,7 +89,8 @@ CI 成功は実情報源の疎通や投資成績を保証しない。初回チ�
 | 翌朝8:45〜8:55 | 昇格済み LIVE の `PROPOSED` 注文だけ人間が確認 |
 | 各成功 run 後 | state/台帳を検証し、private remote との同期を確認 |
 | 毎週 | `run-history.csv` の失敗・漏れ・未照合注文を確認 |
-| 四半期 | clean-clone 復旧訓練と戦略成績 review |
+| 四半期 | 戦略成績 review |
+| LIVE前・repository layout変更後 | clean-clone確認 |
 | ルール・schema変更前 | private commit/push、20日試験、shadow 評価 |
 
 重大データ不足、実行漏れ、復旧不能、未照合注文が残る場合は、新しい注文票を増やさず問題を先に解消する。

@@ -36,6 +36,7 @@ PAPER_DURATION_GATE = "minimum_12_month_paper_trade"
 SHADOW_RUN_GATE = "twenty_day_shadow_run"
 OFFICIAL_COVERAGE_GATE = "official_source_coverage"
 REPOSITORY_RECOVERY_GATE = "private_repository_recovery"
+REPOSITORY_LAYOUT_REVISION = 1
 PERSONAL_RISK_GATE = "personal_risk_and_broker_check"
 V04_PROMOTION_GATE = "v04_holdout_promotion"
 LIVE_PROMOTION_GATE = "live_promotion"
@@ -1058,7 +1059,7 @@ def evaluate_repository_recovery(
     drill_path: Path | None = None,
     at: datetime | None = None,
 ) -> dict[str, Any]:
-    """Validate a recent clean-clone and mirror recovery drill."""
+    """Validate a clean clone for the current repository layout revision."""
     root = root.resolve()
     private_root = (root / "operations/private").resolve()
     drill_path = drill_path or (private_root / "evidence/recovery-drill.json")
@@ -1083,8 +1084,8 @@ def evaluate_repository_recovery(
             metrics={},
             inputs=[],
         )
-    if drill.get("schema_version") != "1.0":
-        blockers.append("recovery drill schema_version must be 1.0")
+    if drill.get("schema_version") != "1.1":
+        blockers.append("recovery drill schema_version must be 1.1")
     if not isinstance(drill.get("drill_id"), str) or not drill.get(
         "drill_id", ""
     ).strip():
@@ -1095,6 +1096,14 @@ def evaluate_repository_recovery(
         blockers.append("recovery operator is required")
     if drill.get("repository_visibility") != "PRIVATE":
         blockers.append("repository_visibility must be PRIVATE")
+    if drill.get("reason") not in ("PRE_LIVE", "REPOSITORY_LAYOUT_CHANGE"):
+        blockers.append(
+            "recovery reason must be PRE_LIVE or REPOSITORY_LAYOUT_CHANGE"
+        )
+    if drill.get("repository_layout_revision") != REPOSITORY_LAYOUT_REVISION:
+        blockers.append(
+            "recovery repository_layout_revision does not match the current layout"
+        )
 
     started: datetime | None = None
     completed: datetime | None = None
@@ -1111,8 +1120,6 @@ def evaluate_repository_recovery(
             blockers.append("recovery completed_at_jst cannot be in the future")
         if (completed - started).total_seconds() > 24 * 60 * 60:
             blockers.append("recovery drill duration exceeds 24 hours")
-        if (reference_time - completed).total_seconds() > 90 * 24 * 60 * 60:
-            blockers.append("recovery drill is older than 90 days")
 
     source_commit = drill.get("source_private_commit")
     recovered_commit = drill.get("recovered_private_commit")
@@ -1144,8 +1151,6 @@ def evaluate_repository_recovery(
         "latest_handoff",
         "all_ledgers",
         "unreconciled_orders",
-        "private_remote_restore",
-        "access_controlled_mirror_restore",
     )
     for name in required_checks:
         if checks.get(name) is not True:
@@ -1163,7 +1168,7 @@ def evaluate_repository_recovery(
             "completed_at_jst": completed.isoformat(timespec="seconds")
             if completed
             else None,
-            "age_days": (reference_time - completed).days if completed else None,
+            "repository_layout_revision": drill.get("repository_layout_revision"),
             "required_check_count": len(required_checks),
             "passed_check_count": sum(checks.get(name) is True for name in required_checks),
         },
@@ -1936,7 +1941,8 @@ def _build_parser() -> argparse.ArgumentParser:
     coverage.add_argument("--history", type=Path)
     coverage.add_argument("--write-evidence", type=Path)
     recovery = subparsers.add_parser(
-        "repository-recovery", help="validate a recent private recovery drill"
+        "repository-recovery",
+        help="validate a clean clone for the current repository layout",
     )
     recovery.add_argument("--drill", type=Path)
     recovery.add_argument("--at", type=str)

@@ -80,9 +80,9 @@ EDINET は各日 `LIVE_NETWORK` で1 request 以上成功していなければ�
 
 公開株価 archive は再現用の二次データであり、この判定だけで注文価格の公式確認を代替しない。対象銘柄の価格、corporate action、会社IRは各 run の一次資料証跡へ残す。
 
-## private repository 復旧
+## private repository の clean-clone 確認
 
-`private_repository_recovery` は、通常の private remote とアクセス制御された mirror の両方から復旧できた記録を検証する。公開テンプレート `operations/templates/live-gate-evidence/recovery-drill-template.json` を private の `operations/private/evidence/recovery-drill.json` へコピーし、実施結果を記入する。
+`private_repository_recovery` は、通常の private remote から現行 repository layout を clean clone できた記録を検証する。公開テンプレート `operations/templates/live-gate-evidence/recovery-drill-template.json` を private の `operations/private/evidence/recovery-drill.json` へコピーし、実施結果を記入する。
 
 ~~~bash
 stock.jp/.venv/bin/python stock.jp/scripts/live_gate_evidence.py \
@@ -90,9 +90,9 @@ stock.jp/.venv/bin/python stock.jp/scripts/live_gate_evidence.py \
   --write-evidence stock.jp/operations/private/evidence/repository-recovery.json
 ~~~
 
-clean clone、submodule、workspace setup、state と bootstrap、最新成功 run と handoff、全台帳、未照合注文を照合する。復旧した private commit と public submodule commit は元の40桁SHAと一致しなければならない。通常 remote と mirror の両方の復旧を要求する。
+clean clone、submodule、workspace setup、state と bootstrap、最新成功 run と handoff、全台帳、未照合注文を照合する。復元した private commit と public submodule commit は元の40桁SHAと一致しなければならない。別媒体の mirror は要求しない。
 
-復旧訓練は90日で失効する。稼働中 checkout を訓練先にせず、一時ディレクトリを使う。repository URL、credential、口座情報は証跡へ記載しない。
+証跡は日数では失効しない。setup、submodule、状態 schema、台帳構成に影響する変更では、公開validatorの `REPOSITORY_LAYOUT_REVISION` を上げる。既存証跡はrevision不一致で失効するため、変更後にclean cloneを再確認する。稼働中checkoutを確認先にせず、一時ディレクトリを使う。repository URL、credential、口座情報は証跡へ記載しない。
 
 ## 利用者のリスク・税・証券会社確認
 

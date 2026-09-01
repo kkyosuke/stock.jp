@@ -186,4 +186,4 @@ $japan-stock-operator を使って、今日の夜間運用を最後まで実行�
 
 運用ルール自体の閾値は日次運用の都合で変更しない。手順の不具合と投資仮説の成績を分けてレビューする。
 
-private remote との同期、四半期の clean-clone 復旧訓練、実行漏れ検知、CIについては[継続稼働準備 v0.1](operation-readiness-v0.1.md)に従う。
+private remote との同期、LIVE 前または構成変更後の clean-clone 確認、実行漏れ検知、CIについては[継続稼働準備 v0.1](operation-readiness-v0.1.md)に従う。

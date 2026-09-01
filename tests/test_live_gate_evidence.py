@@ -22,6 +22,7 @@ from scripts.live_gate_evidence import (
     apply_live_promotion,
     validate_promoted_evidence_bundle,
     LIVE_REQUIREMENT_EVIDENCE,
+    REPOSITORY_LAYOUT_REVISION,
     write_private_evidence,
 )
 
@@ -524,10 +525,12 @@ class RepositoryRecoveryEvidenceTest(unittest.TestCase):
         commit = "1" * 40
         public_commit = "2" * 40
         drill = {
-            "schema_version": "1.0",
-            "drill_id": "recovery-2026-q3",
+            "schema_version": "1.1",
+            "drill_id": "pre-live-clean-clone",
             "operator": "portfolio-owner",
             "repository_visibility": "PRIVATE",
+            "reason": "PRE_LIVE",
+            "repository_layout_revision": REPOSITORY_LAYOUT_REVISION,
             "started_at_jst": "2026-08-31T20:00:00+09:00",
             "completed_at_jst": "2026-08-31T21:00:00+09:00",
             "source_private_commit": commit,
@@ -545,11 +548,9 @@ class RepositoryRecoveryEvidenceTest(unittest.TestCase):
                     "latest_handoff",
                     "all_ledgers",
                     "unreconciled_orders",
-                    "private_remote_restore",
-                    "access_controlled_mirror_restore",
                 )
             },
-            "result_notes": "clean checkout and protected mirror both reconciled",
+            "result_notes": "clean checkout reconciled for the current layout",
         }
         path = root / "operations/private/evidence/recovery-drill.json"
         _write(path, json.dumps(drill))
@@ -564,9 +565,22 @@ class RepositoryRecoveryEvidenceTest(unittest.TestCase):
                 at=datetime.fromisoformat("2026-09-01T09:00:00+09:00"),
             )
         self.assertTrue(result["eligible"], result["blockers"])
-        self.assertEqual(result["metrics"]["passed_check_count"], 10)
+        self.assertEqual(result["metrics"]["passed_check_count"], 8)
 
-    def test_stale_recovery_is_rejected(self) -> None:
+    def test_public_template_tracks_the_current_layout_revision(self) -> None:
+        template = json.loads(
+            (
+                Path(__file__).resolve().parents[1]
+                / "operations/templates/live-gate-evidence/recovery-drill-template.json"
+            ).read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            template["repository_layout_revision"], REPOSITORY_LAYOUT_REVISION
+        )
+        self.assertNotIn("access_controlled_mirror_restore", template["checks"])
+        self.assertNotIn("private_remote_restore", template["checks"])
+
+    def test_clean_clone_does_not_expire_by_age(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._write_drill(root)
@@ -574,8 +588,24 @@ class RepositoryRecoveryEvidenceTest(unittest.TestCase):
                 root=root,
                 at=datetime.fromisoformat("2026-12-15T09:00:00+09:00"),
             )
+        self.assertTrue(result["eligible"], result["blockers"])
+
+    def test_layout_revision_change_requires_a_new_clean_clone(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = self._write_drill(root)
+            drill = json.loads(path.read_text(encoding="utf-8"))
+            drill["repository_layout_revision"] = REPOSITORY_LAYOUT_REVISION - 1
+            path.write_text(json.dumps(drill), encoding="utf-8")
+            result = evaluate_repository_recovery(
+                root=root,
+                at=datetime.fromisoformat("2026-09-01T09:00:00+09:00"),
+            )
         self.assertFalse(result["eligible"])
-        self.assertIn("recovery drill is older than 90 days", result["blockers"])
+        self.assertIn(
+            "recovery repository_layout_revision does not match the current layout",
+            result["blockers"],
+        )
 
     def test_commit_mismatch_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

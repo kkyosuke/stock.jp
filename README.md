@@ -16,7 +16,7 @@
 | `operations/templates/` | 秘密情報を含まない台帳テンプレート |
 | `scripts/`, `tests/` | 実装と回帰テスト |
 
-実運用では private リポジトリ `stock.jp.private` がこのリポジトリを submodule として固定し、`stock.jp/operations/private` を private 側の `operations/private` へ接続します。暗号化アーカイブは使わず、private Git の履歴と復旧訓練を運用証跡にします。詳細は[リポジトリ境界](docs/architecture/repository-boundaries.md)を参照してください。
+実運用では private リポジトリ `stock.jp.private` がこのリポジトリを submodule として固定し、`stock.jp/operations/private` を private 側の `operations/private` へ接続します。暗号化アーカイブは使わず、private Git の履歴と現行構成の clean-clone 確認を運用証跡にします。詳細は[リポジトリ境界](docs/architecture/repository-boundaries.md)を参照してください。
 
 ## はじめに
 
