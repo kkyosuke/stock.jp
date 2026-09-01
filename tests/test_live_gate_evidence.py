@@ -480,19 +480,33 @@ class OfficialCoverageEvidenceTest(unittest.TestCase):
         )
         return [row["run_id"] for row in rows]
 
-    @patch("scripts.live_gate_evidence.evaluate_shadow_run")
-    def test_20_live_network_official_checks_are_eligible(self, shadow) -> None:
-        shadow.return_value = {"eligible": True}
+    @patch("scripts.live_gate_evidence.validate_run_artifacts")
+    def test_latest_live_network_official_check_is_eligible(self, validate) -> None:
+        validate.return_value = {}
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._write_coverage(root)
             result = evaluate_official_coverage(root=root)
         self.assertTrue(result["eligible"], result["blockers"])
-        self.assertEqual(result["metrics"]["checked_run_counts"]["edinet"], 20)
+        self.assertEqual(result["metrics"]["checked_run_counts"]["edinet"], 1)
+        self.assertEqual(result["metrics"]["run_count"], 1)
+        self.assertEqual(validate.call_count, 1)
 
-    @patch("scripts.live_gate_evidence.evaluate_shadow_run")
-    def test_fixture_scan_is_rejected(self, shadow) -> None:
-        shadow.return_value = {"eligible": True}
+    @patch("scripts.live_gate_evidence.validate_run_artifacts")
+    def test_latest_run_integrity_failure_is_rejected(self, validate) -> None:
+        validate.side_effect = ValueError("broken run")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_coverage(root)
+            result = evaluate_official_coverage(root=root)
+        self.assertFalse(result["eligible"])
+        self.assertTrue(
+            any("run integrity failed" in item for item in result["blockers"])
+        )
+
+    @patch("scripts.live_gate_evidence.validate_run_artifacts")
+    def test_fixture_scan_is_rejected(self, validate) -> None:
+        validate.return_value = {}
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             run_ids = self._write_coverage(root)
@@ -504,9 +518,9 @@ class OfficialCoverageEvidenceTest(unittest.TestCase):
         self.assertFalse(result["eligible"])
         self.assertTrue(any("not a live network scan" in item for item in result["blockers"]))
 
-    @patch("scripts.live_gate_evidence.evaluate_shadow_run")
-    def test_non_primary_decision_source_is_rejected(self, shadow) -> None:
-        shadow.return_value = {"eligible": True}
+    @patch("scripts.live_gate_evidence.validate_run_artifacts")
+    def test_non_primary_decision_source_is_rejected(self, validate) -> None:
+        validate.return_value = {}
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             run_ids = self._write_coverage(root)
@@ -749,7 +763,7 @@ class PersonalRiskEvidenceTest(unittest.TestCase):
 
 
 class V04PromotionEvidenceTest(unittest.TestCase):
-    def _write_promotion(self, root: Path) -> tuple[Path, Path, Path, Path]:
+    def _write_promotion(self, root: Path) -> tuple[Path, Path, Path]:
         replay = {
             "schema_version": "1.0",
             "status": "COMPLETED",
@@ -779,7 +793,6 @@ class V04PromotionEvidenceTest(unittest.TestCase):
         replay_path = root / "data/historical-replay/replay-result-2025-2026.json"
         _write(replay_path, json.dumps(replay))
         historical_path = root / "operations/private/evidence/historical-replay.json"
-        paper_path = root / "operations/private/evidence/paper-12-months.json"
         _write(
             historical_path,
             json.dumps(
@@ -787,18 +800,6 @@ class V04PromotionEvidenceTest(unittest.TestCase):
                     "schema_version": "1.0",
                     "gate": "historical_replay_2025_2026_accepted",
                     "evaluated_at_jst": "2026-08-31T22:00:00+09:00",
-                    "eligible": True,
-                    "blockers": [],
-                }
-            ),
-        )
-        _write(
-            paper_path,
-            json.dumps(
-                {
-                    "schema_version": "1.0",
-                    "gate": "minimum_12_month_paper_trade",
-                    "evaluated_at_jst": "2026-08-31T22:10:00+09:00",
                     "eligible": True,
                     "blockers": [],
                 }
@@ -814,9 +815,6 @@ class V04PromotionEvidenceTest(unittest.TestCase):
             "historical_replay_evidence_sha256": hashlib.sha256(
                 historical_path.read_bytes()
             ).hexdigest(),
-            "paper_duration_evidence_sha256": hashlib.sha256(
-                paper_path.read_bytes()
-            ).hexdigest(),
             "acknowledgements": {
                 name: True
                 for name in (
@@ -825,7 +823,6 @@ class V04PromotionEvidenceTest(unittest.TestCase):
                     "single_name_concentration_loss_reviewed",
                     "industry_concentration_loss_reviewed",
                     "waiting_cash_is_not_safe_asset",
-                    "allocation_diagnostic_does_not_replace_forward_paper",
                     "no_holdout_retuning",
                 )
             },
@@ -840,7 +837,7 @@ class V04PromotionEvidenceTest(unittest.TestCase):
         }
         review_path = root / "operations/private/evidence/v04-holdout-review.json"
         _write(review_path, json.dumps(review))
-        return replay_path, historical_path, paper_path, review_path
+        return replay_path, historical_path, review_path
 
     def test_bound_explicit_v04_promotion_is_eligible(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -848,12 +845,12 @@ class V04PromotionEvidenceTest(unittest.TestCase):
             self._write_promotion(root)
             result = evaluate_v04_promotion(root=root)
         self.assertTrue(result["eligible"], result["blockers"])
-        self.assertEqual(result["metrics"]["acknowledged_count"], 7)
+        self.assertEqual(result["metrics"]["acknowledged_count"], 6)
 
     def test_changed_replay_invalidates_promotion(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            replay_path, _, _, _ = self._write_promotion(root)
+            replay_path, _, _ = self._write_promotion(root)
             replay = json.loads(replay_path.read_text(encoding="utf-8"))
             replay["comparisons"]["v0.4"]["maximum_drawdown_pct"] = -40.0
             replay_path.write_text(json.dumps(replay), encoding="utf-8")
@@ -861,30 +858,15 @@ class V04PromotionEvidenceTest(unittest.TestCase):
         self.assertFalse(result["eligible"])
         self.assertIn("v0.4 review replay_result_sha256 does not match", result["blockers"])
 
-    def test_missing_12_month_evidence_is_rejected(self) -> None:
+    def test_promotion_does_not_require_duration_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            _, _, paper_path, _ = self._write_promotion(root)
-            paper_path.unlink()
+            self._write_promotion(root)
+            self.assertFalse(
+                (root / "operations/private/evidence/paper-12-months.json").exists()
+            )
             result = evaluate_v04_promotion(root=root)
-        self.assertFalse(result["eligible"])
-        self.assertTrue(any("paper_duration_evidence is missing" in item for item in result["blockers"]))
-
-    def test_v04_review_cannot_predate_paper_evidence(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            _, _, paper_path, review_path = self._write_promotion(root)
-            paper = json.loads(paper_path.read_text(encoding="utf-8"))
-            paper["evaluated_at_jst"] = "2026-09-01T10:00:00+09:00"
-            paper_path.write_text(json.dumps(paper), encoding="utf-8")
-            review = json.loads(review_path.read_text(encoding="utf-8"))
-            review["paper_duration_evidence_sha256"] = hashlib.sha256(
-                paper_path.read_bytes()
-            ).hexdigest()
-            review_path.write_text(json.dumps(review), encoding="utf-8")
-            result = evaluate_v04_promotion(root=root)
-        self.assertFalse(result["eligible"])
-        self.assertIn("v0.4 review predates paper duration evidence", result["blockers"])
+        self.assertTrue(result["eligible"], result["blockers"])
 
 
 class FinalLivePromotionTest(unittest.TestCase):
@@ -958,14 +940,14 @@ class FinalLivePromotionTest(unittest.TestCase):
             evaluate.return_value = fresh
             result = evaluate_live_promotion(root=root)
         self.assertTrue(result["eligible"], result["blockers"])
-        self.assertEqual(result["metrics"]["eligible_requirement_count"], 8)
+        self.assertEqual(result["metrics"]["eligible_requirement_count"], 6)
 
     @patch("scripts.live_gate_evidence.evaluate_all_live_requirements")
     def test_tampered_stored_evidence_is_rejected(self, evaluate) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             fresh, _, _ = self._write_bundle(root)
-            path = root / LIVE_REQUIREMENT_EVIDENCE["twenty_day_shadow_run"]
+            path = root / LIVE_REQUIREMENT_EVIDENCE["official_source_coverage"]
             stored = json.loads(path.read_text(encoding="utf-8"))
             stored["inputs"] = []
             path.write_text(json.dumps(stored), encoding="utf-8")
@@ -973,11 +955,11 @@ class FinalLivePromotionTest(unittest.TestCase):
             result = evaluate_live_promotion(root=root)
         self.assertFalse(result["eligible"])
         self.assertIn(
-            "stored evidence is stale or does not match: twenty_day_shadow_run",
+            "stored evidence is stale or does not match: official_source_coverage",
             result["blockers"],
         )
         self.assertIn(
-            "final approval evidence hash mismatch: twenty_day_shadow_run",
+            "final approval evidence hash mismatch: official_source_coverage",
             result["blockers"],
         )
 

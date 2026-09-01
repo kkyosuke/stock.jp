@@ -16,6 +16,10 @@ from zoneinfo import ZoneInfo
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 JST = ZoneInfo("Asia/Tokyo")
 STATE_SCHEMA_VERSION = "2.1"
+RETIRED_LIVE_GATES = {
+    "minimum_12_month_paper_trade",
+    "twenty_day_shadow_run",
+}
 
 TEMPLATE_TO_PRIVATE = {
     "daily-run-state-template.json": "state.json",
@@ -165,10 +169,10 @@ def _normalized_source_config(
 def _normalized_policy(
     policy: dict[str, Any], template: dict[str, Any]
 ) -> dict[str, Any]:
-    if policy.get("schema_version") not in {"1.0", "1.1", "1.2"}:
+    if policy.get("schema_version") not in {"1.0", "1.1", "1.2", "1.3"}:
         return policy
     normalized = dict(policy)
-    normalized["schema_version"] = "1.2"
+    normalized["schema_version"] = "1.3"
     gates = policy.get("live_gates")
     evidence = policy.get("live_gate_evidence")
     normalized["live_gates"] = {
@@ -187,6 +191,9 @@ def _normalized_policy(
         normalized["live_gate_evidence"][replacement_gate] = evidence[legacy_gate]
     normalized["live_gates"].pop(legacy_gate, None)
     normalized["live_gate_evidence"].pop(legacy_gate, None)
+    for retired_gate in RETIRED_LIVE_GATES:
+        normalized["live_gates"].pop(retired_gate, None)
+        normalized["live_gate_evidence"].pop(retired_gate, None)
     normalized.setdefault("v04_holdout_promotion", False)
     return normalized
 

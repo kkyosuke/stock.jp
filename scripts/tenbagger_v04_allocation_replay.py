@@ -2,7 +2,7 @@
 """Replay v0.2 versus v0.4 allocation over the complete 2025 price archive.
 
 This is deliberately an allocation diagnostic, not a full tenbagger strategy
-backtest and not a substitute for twelve months of forward PAPER operation.
+backtest and not a substitute for explicit LIVE promotion review.
 Point-in-time fundamental, disclosure, dilution, SAM/SOM and MRS inputs are not
 available. Candidates therefore come from a frozen price/liquidity proxy screen,
 and every scheduled add is an explicit all-gates-pass stress assumption.
@@ -644,7 +644,7 @@ def write_outputs(
         "- 未観測の追加条件を全通過としたため、実運用より追加が多い可能性が高い。",
         "- 未調整表示価格を使用している。選定12銘柄の隣接終値倍率が0.5倍以下または2倍以上なら実験全体を停止するが、公式コーポレートアクション表による完全調整ではない。",
         "- 正式な検証にはpoint-in-time財務・開示、全ハードゲート、100点スコア、MRS、上場廃止、税・費用、全出口条件が必要である。",
-        "- 最低12か月の前向きPAPERは実時間で別途完了しなければならない。",
+        "- PAPERの経過日数と連続run数はLIVEリリース条件にしない。",
         "",
         "## 再現",
         "",

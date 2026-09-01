@@ -16,4 +16,4 @@
 - `rules/`: 変更管理された売買ルール
 - `research/`: 過去データ検証、制約、再生成手順
 
-実資金投入の可否は研究成績だけでは決めません。`operation_bootstrap.py check` の全ゲート、最低12か月の PAPER、実データ20営業日の連続運用、現行 private 構成の clean-clone 確認、利用者の明示承認をすべて満たした場合だけ GO とします。
+実資金投入の可否は研究成績だけでは決めません。`operation_bootstrap.py check` の全ゲート、最新PAPER runの公式情報源coverage、現行 private 構成の clean-clone 確認、利用者の明示承認をすべて満たした場合だけ GO とします。PAPERの経過日数と連続run数には最低条件を設けません。

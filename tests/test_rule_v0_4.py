@@ -31,8 +31,9 @@ class RuleV04Test(unittest.TestCase):
         ):
             self.assertIn(phrase, self.text)
 
-    def test_live_requires_a_fresh_v04_paper_period(self) -> None:
-        self.assertIn("v0.4で最低12か月の前向きPAPER", self.text)
+    def test_live_has_no_elapsed_time_or_run_count_gate(self) -> None:
+        self.assertIn("PAPERの経過日数と連続run数には最低条件を設けない", self.text)
+        self.assertNotIn("v0.4で最低12か月の前向きPAPER", self.text)
         self.assertIn("v04_holdout_promotion", self.text)
 
     def test_local_markdown_links_resolve(self) -> None:

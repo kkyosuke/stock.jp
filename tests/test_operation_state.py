@@ -216,13 +216,20 @@ class OperationStateTest(unittest.TestCase):
             "operations/private/migrations/legacy",
         )
 
-    def test_migrates_new_live_gate_without_changing_legacy_decisions(self) -> None:
+    def test_retires_elapsed_time_gates_without_changing_other_decisions(self) -> None:
         initialize_or_migrate_workspace(self.root)
         private = self.root / "operations/private"
         policy_path = private / "operation-policy.json"
         policy = json.loads(policy_path.read_text(encoding="utf-8"))
-        policy["live_gates"].pop("minimum_12_month_paper_trade")
-        policy["live_gate_evidence"].pop("minimum_12_month_paper_trade")
+        policy["schema_version"] = "1.2"
+        policy["live_gates"]["minimum_12_month_paper_trade"] = True
+        policy["live_gate_evidence"]["minimum_12_month_paper_trade"] = (
+            "operations/private/evidence/paper-12-months.json"
+        )
+        policy["live_gates"]["twenty_day_shadow_run"] = True
+        policy["live_gate_evidence"]["twenty_day_shadow_run"] = (
+            "operations/private/evidence/shadow-20-days.json"
+        )
         policy["live_gates"]["historical_replay_2025_2026_accepted"] = True
         policy["live_gate_evidence"]["historical_replay_2025_2026_accepted"] = (
             "operations/private/evidence/replay.md"
@@ -233,10 +240,13 @@ class OperationStateTest(unittest.TestCase):
         migrated = json.loads(policy_path.read_text(encoding="utf-8"))
 
         self.assertIn("operations/private/operation-policy.json", result["migrated"])
-        self.assertFalse(migrated["live_gates"]["minimum_12_month_paper_trade"])
-        self.assertIsNone(
-            migrated["live_gate_evidence"]["minimum_12_month_paper_trade"]
+        self.assertEqual(migrated["schema_version"], "1.3")
+        self.assertNotIn("minimum_12_month_paper_trade", migrated["live_gates"])
+        self.assertNotIn("twenty_day_shadow_run", migrated["live_gates"])
+        self.assertNotIn(
+            "minimum_12_month_paper_trade", migrated["live_gate_evidence"]
         )
+        self.assertNotIn("twenty_day_shadow_run", migrated["live_gate_evidence"])
         self.assertTrue(
             migrated["live_gates"]["historical_replay_2025_2026_accepted"]
         )
@@ -256,7 +266,7 @@ class OperationStateTest(unittest.TestCase):
         migrated = json.loads(policy_path.read_text(encoding="utf-8"))
 
         self.assertIn("operations/private/operation-policy.json", result["migrated"])
-        self.assertEqual(migrated["schema_version"], "1.2")
+        self.assertEqual(migrated["schema_version"], "1.3")
         self.assertEqual(migrated["active_rule_version"], "v0.2")
         self.assertFalse(migrated["v04_holdout_promotion"])
 
@@ -277,7 +287,7 @@ class OperationStateTest(unittest.TestCase):
         initialize_or_migrate_workspace(self.root)
         migrated = json.loads(policy_path.read_text(encoding="utf-8"))
 
-        self.assertEqual(migrated["schema_version"], "1.2")
+        self.assertEqual(migrated["schema_version"], "1.3")
         self.assertTrue(migrated["live_gates"]["private_repository_recovery"])
         self.assertEqual(
             migrated["live_gate_evidence"]["private_repository_recovery"],
