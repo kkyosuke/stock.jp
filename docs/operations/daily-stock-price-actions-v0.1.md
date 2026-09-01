@@ -20,8 +20,8 @@ chart endpointを銘柄ごとに呼び出す。Python標準ライブラリと既
    permissions`と`Allow GitHub Actions to create and approve pull requests`を有効にする。
 2. 今回の初回データは`lookback_days=21`で取得する。将来Actionsから再構築する場合も、
    `daily-stock-prices`を`Run workflow`から同じ値で1回実行する。
-3. 作成されたPRで`data/daily-prices/latest.json`の`fetch.error_count`と最新日の
-   `quote_count`を確認してマージする。
+3. repository設定でauto-mergeを有効にする。workflowはデータ検証、全test、compile、
+   20日smokeが成功した場合だけ、作成したPRのsquash auto-mergeを有効にする。
 
 通常実行に株価APIキーは不要である。リポジトリ設定で標準`GITHUB_TOKEN`からのPR作成を
 許可できない場合だけ、Contents/Pull requestsの書込権限を持つfine-grained PATまたは
@@ -36,6 +36,13 @@ GitHub App tokenをActions secret `PR_TOKEN`へ登録する。
 
 全リクエストの98%未満しか成功しなければ、広域障害やアクセス制限とみなして追跡データを
 変更せず失敗する。98%以上なら個別エラーを`FETCH_ERROR`として残し、PRで確認できる。
+収集後にarchive schema、checksum、全回帰test、Python compile、20日operation smokeを
+同じjobで実行する。いずれかが失敗した場合はPRを作成・mergeしない。すべて成功し、差分が
+ある場合だけPRを作成し、`--auto --squash`でmergeする。差分がない日は何もしない。
+
+標準`GITHUB_TOKEN`で作成したPRは再帰的なworkflow起動を抑止されることがあるため、
+merge前検証を収集workflow内に置く。`PR_TOKEN`を設定して通常のPR checkが起動する場合は、
+auto-mergeがその必須checkも待つ。
 
 ## 境界
 
