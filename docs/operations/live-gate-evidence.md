@@ -93,3 +93,20 @@ stock.jp/.venv/bin/python stock.jp/scripts/live_gate_evidence.py \
 clean clone、submodule、workspace setup、state と bootstrap、最新成功 run と handoff、全台帳、未照合注文を照合する。復旧した private commit と public submodule commit は元の40桁SHAと一致しなければならない。通常 remote と mirror の両方の復旧を要求する。
 
 復旧訓練は90日で失効する。稼働中 checkout を訓練先にせず、一時ディレクトリを使う。repository URL、credential、口座情報は証跡へ記載しない。
+
+## 利用者のリスク・税・証券会社確認
+
+`personal_risk_and_broker_check` は利用者本人しか確定できない。`operations/templates/live-gate-evidence/personal-risk-and-broker-template.json` を private evidence へコピーし、公式の証券会社規則と本人の状況を確認して記入する。
+
+~~~bash
+stock.jp/.venv/bin/python stock.jp/scripts/live_gate_evidence.py \
+  --root stock.jp personal-risk \
+  --write-evidence stock.jp/operations/private/evidence/personal-risk.json
+~~~
+
+生活・納税・5年以内の予定・借入資金を除外し、全体損失停止、税区分、手数料、売買単位、指値、注文期限、8:45〜8:55の本人確認能力を確認する。個人上限は v0.4 の1銘柄10%、業種20%、初回5%、追加2.5%、参加率10%を緩和できない。発注は `HUMAN_ONLY` で broker API の自動送信を使わない。
+
+金融庁の注意喚起に沿い、正しい証券会社URLの bookmark、MFAまたはpasskey、login・取引通知、phishing・口座lock時の手順も確認する。電話番号やcredentialはJSONに書かず、保管場所だけを記録する。この確認は90日で失効し、証券会社仕様や本人事情が変われば直ちに再実施する。
+
+- [金融庁: フィッシングによる証券口座への不正アクセス等にご注意ください](https://www.fsa.go.jp/ordinary/chuui/chuui_phishing.html)
+- [JPX: 内国株の売買制度](https://www.jpx.co.jp/equities/trading/domestic/01.html)
