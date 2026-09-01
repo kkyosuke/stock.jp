@@ -607,6 +607,23 @@ class RepositoryRecoveryEvidenceTest(unittest.TestCase):
             result["blockers"],
         )
 
+    def test_boolean_is_not_accepted_as_a_layout_revision(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = self._write_drill(root)
+            drill = json.loads(path.read_text(encoding="utf-8"))
+            drill["repository_layout_revision"] = True
+            path.write_text(json.dumps(drill), encoding="utf-8")
+            result = evaluate_repository_recovery(
+                root=root,
+                at=datetime.fromisoformat("2026-09-01T09:00:00+09:00"),
+            )
+        self.assertFalse(result["eligible"])
+        self.assertIn(
+            "recovery repository_layout_revision does not match the current layout",
+            result["blockers"],
+        )
+
     def test_commit_mismatch_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

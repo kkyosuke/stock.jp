@@ -1100,7 +1100,11 @@ def evaluate_repository_recovery(
         blockers.append(
             "recovery reason must be PRE_LIVE or REPOSITORY_LAYOUT_CHANGE"
         )
-    if drill.get("repository_layout_revision") != REPOSITORY_LAYOUT_REVISION:
+    layout_revision = drill.get("repository_layout_revision")
+    if (
+        type(layout_revision) is not int
+        or layout_revision != REPOSITORY_LAYOUT_REVISION
+    ):
         blockers.append(
             "recovery repository_layout_revision does not match the current layout"
         )
