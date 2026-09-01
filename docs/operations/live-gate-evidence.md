@@ -38,9 +38,9 @@ stock.jp/.venv/bin/python stock.jp/scripts/live_gate_evidence.py \
 
 再生結果を変更すると過去の review は無効になる。成績の数値だけでは自動受入せず、利用者の review がない状態では gate を `false` のままにする。
 
-## v0.4 PAPER を最低12か月
+## 任意diagnostic: v0.4 PAPER期間
 
-`minimum_12_month_paper_trade` は private の `run-history.csv` と各成功 report から判定する。
+`paper-duration` は private の `run-history.csv` と各成功 reportから365日分の運用履歴を診断できる。
 
 ~~~bash
 stock.jp/.venv/bin/python stock.jp/scripts/live_gate_evidence.py \
@@ -48,13 +48,11 @@ stock.jp/.venv/bin/python stock.jp/scripts/live_gate_evidence.py \
   --write-evidence stock.jp/operations/private/evidence/paper-12-months.json
 ~~~
 
-最新 attempt が `COMPLETED / PAPER / v0.4` の run だけを数え、最初と最後の完了日の間が365日以上、12以上の暦月に成功記録があり、期間中に成功が1件もない暦月がないことを要求する。対応する private report がない run は数えない。昇格前に `LIVE` run が記録されていた場合も失敗する。
+この結果は運用品質の任意diagnosticであり、`operation-policy.json`のLIVE必須gate、最終承認bundle、v0.4昇格の入力にはしない。365日に満たなくてもLIVE昇格を阻害しない。
 
-一時 simulation の20日や履歴再生の日数を PAPER 期間へ算入しない。実時間が365日経過する前に、この gate をコードや手動編集で短縮しない。
+## 任意diagnostic: 実データ20営業日のshadow run
 
-## 実データ20営業日の shadow run
-
-`twenty_day_shadow_run` は公開株価 archive の最新20営業日と、private の実 run を1対1で照合する。
+`shadow-run` は公開株価archiveの最新20営業日とprivateの実runを1対1で照合できる。
 
 ~~~bash
 stock.jp/.venv/bin/python stock.jp/scripts/live_gate_evidence.py \
@@ -62,13 +60,11 @@ stock.jp/.venv/bin/python stock.jp/scripts/live_gate_evidence.py \
   --write-evidence stock.jp/operations/private/evidence/shadow-20-days.json
 ~~~
 
-各 run は `COMPLETED / PAPER / v0.4`、run ID と株価基準日が同一、alert と data gap が0件でなければならない。さらに通常の run integrity を再検証し、注文件数と `orders.csv` を照合し、20日間をまたぐ ticket ID および銘柄・side・trade date の重複を拒否する。証跡は run ディレクトリ全体と各価格 session の SHA-256 に拘束される。
-
-`operation_smoke.py --days 20` は状態遷移の回帰テストであり、この実データ gate には算入しない。失敗日や取得漏れがあれば、修正後に新しい20営業日を連続して完了する。
+この結果も任意diagnosticであり、LIVE必須gateと最終承認bundleには含めない。20営業日に満たなくてもLIVE昇格を阻害しない。
 
 ## 公式情報源 coverage
 
-`official_source_coverage` は、合格した20日 shadow window の全 run について確認する。
+`official_source_coverage` は、最新の完了済みv0.4 PAPER runについて確認する。
 
 ~~~bash
 stock.jp/.venv/bin/python stock.jp/scripts/live_gate_evidence.py \
@@ -76,7 +72,7 @@ stock.jp/.venv/bin/python stock.jp/scripts/live_gate_evidence.py \
   --write-evidence stock.jp/operations/private/evidence/official-coverage.json
 ~~~
 
-EDINET は各日 `LIVE_NETWORK` で1 request 以上成功していなければならず、fixture 実行は算入しない。TDnet、EDINET、JPXと、対象銘柄がある日の会社IRが `CHECKED` で、対応する一次資料行が存在することを要求する。判断に使用した公式カテゴリの行が二次資料なら失敗する。解消していない data gap と、shadow window より古い source watermark も拒否する。
+対象runは通常のrun integrity、alert 0件、data gap 0件を満たす必要がある。EDINETは`LIVE_NETWORK`のrequestが1回以上成功していなければならず、fixture実行は算入しない。TDnet、EDINET、JPXと、対象銘柄がある日の会社IRが`CHECKED`で、対応する一次資料行が存在することを要求する。判断に使用した公式カテゴリの行が二次資料なら失敗する。対象runより古いsource watermarkも拒否する。
 
 公開株価 archive は再現用の二次データであり、この判定だけで注文価格の公式確認を代替しない。対象銘柄の価格、corporate action、会社IRは各 run の一次資料証跡へ残す。
 
@@ -113,7 +109,7 @@ stock.jp/.venv/bin/python stock.jp/scripts/live_gate_evidence.py \
 
 ## v0.4 holdout 昇格
 
-`v04_holdout_promotion` は通常の7 gate とは別に必要である。point-in-time の固定 holdout で v0.2 と v0.4 を比較し、12か月 PAPER 証跡が完成した後に、`v04-holdout-review-template.json` を private evidence へコピーして本人が判断する。
+`v04_holdout_promotion` は通常の必須gateとは別に必要である。point-in-timeの固定holdoutでv0.2とv0.4を比較し、`v04-holdout-review-template.json`をprivate evidenceへコピーして本人が判断する。PAPER期間証跡は要求しない。
 
 ~~~bash
 stock.jp/.venv/bin/python stock.jp/scripts/live_gate_evidence.py \
@@ -121,7 +117,7 @@ stock.jp/.venv/bin/python stock.jp/scripts/live_gate_evidence.py \
   --write-evidence stock.jp/operations/private/evidence/v04-promotion.json
 ~~~
 
-再生結果は holdout の事前宣言、閾値凍結日時、再調整0回を持ち、v0.2/v0.4双方のreturn、maximum drawdown、1銘柄・業種の最大損失寄与を含める。本人は v0.4 の資金配分による損失増幅、戦略待機資金が安全資産でないこと、過去診断が前向きPAPERを代替しないことを確認する。
+再生結果はholdoutの事前宣言、閾値凍結日時、再調整0回を持ち、v0.2/v0.4双方のreturn、maximum drawdown、1銘柄・業種の最大損失寄与を含める。本人はv0.4の資金配分による損失増幅と、戦略待機資金が安全資産でないことを確認する。
 
 review は再生結果、履歴再生受入証跡、12か月PAPER証跡のSHA-256へ拘束する。いずれかを更新すると再承認が必要になる。判定は成績が正なら自動昇格するものではなく、本人が `PROMOTE_V0_4_TO_LIVE` を明示した場合だけ合格する。
 

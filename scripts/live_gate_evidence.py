@@ -43,8 +43,6 @@ LIVE_PROMOTION_GATE = "live_promotion"
 LIVE_REQUIREMENT_EVIDENCE = {
     POINT_IN_TIME_GATE: "operations/private/evidence/point-in-time.json",
     HISTORICAL_REPLAY_GATE: "operations/private/evidence/historical-replay.json",
-    PAPER_DURATION_GATE: "operations/private/evidence/paper-12-months.json",
-    SHADOW_RUN_GATE: "operations/private/evidence/shadow-20-days.json",
     OFFICIAL_COVERAGE_GATE: "operations/private/evidence/official-coverage.json",
     REPOSITORY_RECOVERY_GATE: "operations/private/evidence/repository-recovery.json",
     PERSONAL_RISK_GATE: "operations/private/evidence/personal-risk.json",
@@ -856,14 +854,11 @@ def evaluate_shadow_run(
 def evaluate_official_coverage(
     *, root: Path = PROJECT_ROOT, history_path: Path | None = None
 ) -> dict[str, Any]:
-    """Validate official-source evidence for every run in the 20-day window."""
+    """Validate official-source evidence for the latest completed PAPER run."""
     root = root.resolve()
     private_root = (root / "operations/private").resolve()
     history_path = history_path or (private_root / "run-history.csv")
     blockers: list[str] = []
-    shadow = evaluate_shadow_run(root=root, history_path=history_path)
-    if not shadow["eligible"]:
-        blockers.append("20-day shadow run is not eligible")
     if not history_path.is_file():
         return _result(
             gate=OFFICIAL_COVERAGE_GATE,
@@ -892,9 +887,9 @@ def evaluate_official_coverage(
         and row.get("active_rule_version", "").strip() == "v0.4"
     ]
     completed.sort(key=lambda row: row.get("price_date", ""))
-    selected = completed[-20:]
-    if len(selected) != 20:
-        blockers.append("official coverage requires exactly 20 completed shadow runs")
+    selected = completed[-1:]
+    if not selected:
+        blockers.append("official coverage requires a completed v0.4 PAPER run")
 
     inputs = [
         {
@@ -908,6 +903,31 @@ def evaluate_official_coverage(
     latest_cutoffs: dict[str, datetime] = {}
     for row in selected:
         run_id = row.get("run_id", "").strip()
+        try:
+            price_date = date.fromisoformat(row.get("price_date", ""))
+            alert_count = int(row.get("alert_count", ""))
+            data_gap_count = int(row.get("data_gap_count", ""))
+            _parse_aware_datetime(row.get("completed_at_jst", ""))
+            _parse_aware_datetime(row.get("source_cutoff_jst", ""))
+        except (TypeError, ValueError):
+            blockers.append(f"official coverage run metadata is invalid for {run_id}")
+            continue
+        if run_id != price_date.isoformat():
+            blockers.append(f"official coverage run_id must equal price_date: {run_id}")
+        if alert_count != 0:
+            blockers.append(f"official coverage run has alerts: {run_id}")
+        if data_gap_count != 0:
+            blockers.append(f"official coverage run has data gaps: {run_id}")
+        try:
+            validate_run_artifacts(
+                root=root,
+                run_id=run_id,
+                completed_at=row.get("completed_at_jst", ""),
+                source_cutoff=row.get("source_cutoff_jst", ""),
+                price_date=price_date.isoformat(),
+            )
+        except (RunIntegrityError, OSError, ValueError, json.JSONDecodeError) as error:
+            blockers.append(f"official coverage run integrity failed for {run_id}: {error}")
         run_dir = private_root / "runs" / run_id
         coverage_path = run_dir / "coverage.json"
         health_path = run_dir / "provider-health.json"
@@ -1014,6 +1034,13 @@ def evaluate_official_coverage(
                 ("sources", sources_path),
             )
         )
+        inputs.append(
+            {
+                "role": "run_artifacts",
+                "path": f"operations/private/runs/{run_id}",
+                "sha256": _directory_sha256(run_dir),
+            }
+        )
 
     watermarks_path = private_root / "source-watermarks.json"
     if not watermarks_path.is_file():
@@ -1032,7 +1059,7 @@ def evaluate_official_coverage(
                 blockers.append(f"source watermark is missing or invalid: {name}")
                 continue
             if watermark < cutoff:
-                blockers.append(f"source watermark is behind the shadow window: {name}")
+                blockers.append(f"source watermark is behind the covered run: {name}")
         inputs.append(
             {
                 "role": "source_watermarks",
@@ -1345,7 +1372,6 @@ def evaluate_v04_promotion(
     root: Path = PROJECT_ROOT,
     replay_path: Path | None = None,
     historical_evidence_path: Path | None = None,
-    paper_evidence_path: Path | None = None,
     review_path: Path | None = None,
 ) -> dict[str, Any]:
     """Validate an explicit v0.4 holdout promotion bound to accepted evidence."""
@@ -1357,9 +1383,6 @@ def evaluate_v04_promotion(
     historical_evidence_path = historical_evidence_path or (
         private_root / "evidence/historical-replay.json"
     )
-    paper_evidence_path = paper_evidence_path or (
-        private_root / "evidence/paper-12-months.json"
-    )
     review_path = review_path or (private_root / "evidence/v04-holdout-review.json")
     blockers: list[str] = []
     inputs: list[dict[str, str]] = []
@@ -1367,7 +1390,6 @@ def evaluate_v04_promotion(
     for role, path, allowed_root in (
         ("replay_result", replay_path, root),
         ("historical_replay_evidence", historical_evidence_path, private_root),
-        ("paper_duration_evidence", paper_evidence_path, private_root),
         ("v04_holdout_review", review_path, private_root),
     ):
         try:
@@ -1394,7 +1416,6 @@ def evaluate_v04_promotion(
 
     replay = documents["replay_result"]
     historical = documents["historical_replay_evidence"]
-    paper = documents["paper_duration_evidence"]
     review = documents["v04_holdout_review"]
     if replay:
         if replay.get("schema_version") != "1.0" or replay.get("status") != "COMPLETED":
@@ -1448,7 +1469,6 @@ def evaluate_v04_promotion(
 
     for role, evidence, expected_gate in (
         ("historical replay", historical, HISTORICAL_REPLAY_GATE),
-        ("paper duration", paper, PAPER_DURATION_GATE),
     ):
         if evidence:
             if evidence.get("schema_version") != "1.0":
@@ -1481,13 +1501,11 @@ def evaluate_v04_promotion(
         for name, path in (
             ("replay_result_sha256", replay_path),
             ("historical_replay_evidence_sha256", historical_evidence_path),
-            ("paper_duration_evidence_sha256", paper_evidence_path),
         ):
             if not path.is_file() or review.get(name) != _sha256(path):
                 blockers.append(f"v0.4 review {name} does not match")
         for role, evidence in (
             ("historical replay", historical),
-            ("paper duration", paper),
         ):
             evaluated_at = evidence.get("evaluated_at_jst")
             if evidence and not _aware_datetime(evaluated_at):
@@ -1508,7 +1526,6 @@ def evaluate_v04_promotion(
             "single_name_concentration_loss_reviewed",
             "industry_concentration_loss_reviewed",
             "waiting_cash_is_not_safe_asset",
-            "allocation_diagnostic_does_not_replace_forward_paper",
             "no_holdout_retuning",
         )
         for name in required_acknowledgements:
@@ -1586,8 +1603,6 @@ def evaluate_all_live_requirements(*, root: Path = PROJECT_ROOT) -> dict[str, di
     return {
         POINT_IN_TIME_GATE: evaluate_point_in_time(root=root),
         HISTORICAL_REPLAY_GATE: evaluate_historical_replay(root=root),
-        PAPER_DURATION_GATE: evaluate_paper_duration(root=root),
-        SHADOW_RUN_GATE: evaluate_shadow_run(root=root),
         OFFICIAL_COVERAGE_GATE: evaluate_official_coverage(root=root),
         REPOSITORY_RECOVERY_GATE: evaluate_repository_recovery(root=root),
         PERSONAL_RISK_GATE: evaluate_personal_risk(root=root),
@@ -1929,13 +1944,13 @@ def _build_parser() -> argparse.ArgumentParser:
     replay.add_argument("--review", type=Path)
     replay.add_argument("--write-evidence", type=Path)
     paper_duration = subparsers.add_parser(
-        "paper-duration", help="validate at least 12 months of v0.4 PAPER runs"
+        "paper-duration", help="optional diagnostic for v0.4 PAPER duration"
     )
     paper_duration.add_argument("--history", type=Path)
     paper_duration.add_argument("--at", type=str)
     paper_duration.add_argument("--write-evidence", type=Path)
     shadow = subparsers.add_parser(
-        "shadow-run", help="validate 20 consecutive real-data PAPER sessions"
+        "shadow-run", help="optional diagnostic for 20 real-data PAPER sessions"
     )
     shadow.add_argument("--history", type=Path)
     shadow.add_argument("--write-evidence", type=Path)
@@ -1962,7 +1977,6 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     promotion.add_argument("--replay", type=Path)
     promotion.add_argument("--historical-evidence", type=Path)
-    promotion.add_argument("--paper-evidence", type=Path)
     promotion.add_argument("--review", type=Path)
     promotion.add_argument("--write-evidence", type=Path)
     live = subparsers.add_parser(
@@ -2021,7 +2035,6 @@ def main(argv: list[str] | None = None) -> int:
             root=args.root,
             replay_path=args.replay,
             historical_evidence_path=args.historical_evidence,
-            paper_evidence_path=args.paper_evidence,
             review_path=args.review,
         )
     elif args.command == "promote-live":

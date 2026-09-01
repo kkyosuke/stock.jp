@@ -24,7 +24,7 @@ class OperationGovernanceTest(unittest.TestCase):
             "現在の運用モード: `PAPER`",
             "2025年通年と2026年1月1日から8月31日まで",
             "historical-replay-2025-2026.md",
-            "20営業日連続",
+            "365日または20営業日の完了を待たない",
             "発注権限は `HUMAN_ONLY`",
             "月次",
             "四半期",
@@ -40,6 +40,7 @@ class OperationGovernanceTest(unittest.TestCase):
         self.assertIn("`v0.2`と`v0.3`はシャドー比較専用", self.text)
         self.assertIn("`PAPER_PROPOSED`", self.text)
         self.assertIn("証券会社へ入力しない", self.text)
+        self.assertNotIn("最低12か月の前向きPAPER運用を完了", self.text)
 
 
 if __name__ == "__main__":

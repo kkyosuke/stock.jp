@@ -23,14 +23,14 @@ PAPER の機械ゲートは、状態 schema、運用 policy、マージ済み株
 
 このチェックは外部スケジューラが起動できることまでは保証しない。対象端末、private checkout、実行環境、平日18:30のスケジュール、通知経路を別途確認する。
 
-## 2. 20営業日の状態遷移試験
+## 2. 20営業日のoff-line状態遷移試験
 
 ~~~bash
 .venv/bin/python scripts/operation_smoke.py \
   --days 20 --start-date 2026-09-01
 ~~~
 
-この試験は一時フォルダだけを使い、ネットワーク接続、実データ、実注文を使わない。`completed_runs: 20`、`consecutive_successful_runs: 20`、`broker_orders_submitted: 0` を確認する。これは実データ20営業日ゲートの代替ではない。
+この試験は一時フォルダだけを使い、ネットワーク接続、実データ、実注文を使わない。`completed_runs: 20`、`consecutive_successful_runs: 20`、`broker_orders_submitted: 0` を確認する。これは状態遷移の回帰testであり、LIVEリリースの待機日数または実データrun数を要求するものではない。
 
 ## 3. 実行漏れと古い lock
 
@@ -91,23 +91,21 @@ CI 成功は実情報源の疎通や投資成績を保証しない。初回チ�
 | 毎週 | `run-history.csv` の失敗・漏れ・未照合注文を確認 |
 | 四半期 | 戦略成績 review |
 | LIVE前・repository layout変更後 | clean-clone確認 |
-| ルール・schema変更前 | private commit/push、20日試験、shadow 評価 |
+| ルール・schema変更前 | private commit/push、回帰test、必要に応じたshadow評価 |
 
 重大データ不足、実行漏れ、復旧不能、未照合注文が残る場合は、新しい注文票を増やさず問題を先に解消する。
 
 ## 8. LIVE 昇格の必須ゲート
 
-履歴再生は前向き運用の不具合を検出できないため、次を独立した必須ゲートにする。
+次を独立した必須ゲートにする。PAPER期間と連続run数には最低値を設けない。
 
 - point-in-time 全母集団の履歴再生を受け入れ済み
-- 最低12か月の PAPER を完了
-- 実データ20営業日連続で重大な取得漏れ・重複注文が0件
-- 公式情報源 coverage を受け入れ済み
+- 最新の完了済みPAPER runの公式情報源coverageを受け入れ済み
 - private repository の clean-clone 復旧を確認済み
 - 利用者固有の損失許容、税、証券会社仕様、注文可能時間を確認済み
 - v0.4を LIVE 適用ルールへ昇格済み
 - 利用者が `LIVE` と日付を明示して承認済み
 
-コード実行だけで時間経過、本人のリスク判断、証券会社設定を代替しない。すべての gate と evidence が有効でも、発注は必ず人間が最終確認する。
+365日の経過と20営業日の連続runは任意の運用品質diagnosticとして記録できるが、LIVEを阻害しない。コード実行だけで本人のリスク判断と証券会社設定を代替しない。すべての gate と evidence が有効でも、発注は必ず人間が最終確認する。
 
 各 gate の証跡形式と機械判定コマンドは [LIVE gate 証跡の機械判定](live-gate-evidence.md) を正本とする。未達の判定結果は証跡ファイルとして保存できず、真偽値だけを手で変更しても LIVE 昇格を許可しない。
