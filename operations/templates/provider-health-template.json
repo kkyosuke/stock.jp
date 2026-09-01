@@ -1,6 +1,7 @@
 {
   "schema_version": "1.0",
   "run_id": "{{RUN_ID}}",
+  "input_mode": "NOT_RUN",
   "status": "NOT_RUN",
   "started_at_jst": null,
   "completed_at_jst": null,

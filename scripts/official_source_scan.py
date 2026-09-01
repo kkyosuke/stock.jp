@@ -361,6 +361,7 @@ def scan_sources(
     health = _read_json(health_path)
     health.update(
         {
+            "input_mode": "FIXTURE" if fixture_dir else "LIVE_NETWORK",
             "status": "RUNNING",
             "started_at_jst": started.isoformat(timespec="seconds"),
             "completed_at_jst": None,

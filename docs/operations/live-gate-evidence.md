@@ -65,3 +65,17 @@ stock.jp/.venv/bin/python stock.jp/scripts/live_gate_evidence.py \
 各 run は `COMPLETED / PAPER / v0.4`、run ID と株価基準日が同一、alert と data gap が0件でなければならない。さらに通常の run integrity を再検証し、注文件数と `orders.csv` を照合し、20日間をまたぐ ticket ID および銘柄・side・trade date の重複を拒否する。証跡は run ディレクトリ全体と各価格 session の SHA-256 に拘束される。
 
 `operation_smoke.py --days 20` は状態遷移の回帰テストであり、この実データ gate には算入しない。失敗日や取得漏れがあれば、修正後に新しい20営業日を連続して完了する。
+
+## 公式情報源 coverage
+
+`official_source_coverage` は、合格した20日 shadow window の全 run について確認する。
+
+~~~bash
+stock.jp/.venv/bin/python stock.jp/scripts/live_gate_evidence.py \
+  --root stock.jp official-coverage \
+  --write-evidence stock.jp/operations/private/evidence/official-coverage.json
+~~~
+
+EDINET は各日 `LIVE_NETWORK` で1 request 以上成功していなければならず、fixture 実行は算入しない。TDnet、EDINET、JPXと、対象銘柄がある日の会社IRが `CHECKED` で、対応する一次資料行が存在することを要求する。判断に使用した公式カテゴリの行が二次資料なら失敗する。解消していない data gap と、shadow window より古い source watermark も拒否する。
+
+公開株価 archive は再現用の二次データであり、この判定だけで注文価格の公式確認を代替しない。対象銘柄の価格、corporate action、会社IRは各 run の一次資料証跡へ残す。
