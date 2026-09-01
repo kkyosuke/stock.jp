@@ -110,3 +110,17 @@ stock.jp/.venv/bin/python stock.jp/scripts/live_gate_evidence.py \
 
 - [金融庁: フィッシングによる証券口座への不正アクセス等にご注意ください](https://www.fsa.go.jp/ordinary/chuui/chuui_phishing.html)
 - [JPX: 内国株の売買制度](https://www.jpx.co.jp/equities/trading/domestic/01.html)
+
+## v0.4 holdout 昇格
+
+`v04_holdout_promotion` は通常の7 gate とは別に必要である。point-in-time の固定 holdout で v0.2 と v0.4 を比較し、12か月 PAPER 証跡が完成した後に、`v04-holdout-review-template.json` を private evidence へコピーして本人が判断する。
+
+~~~bash
+stock.jp/.venv/bin/python stock.jp/scripts/live_gate_evidence.py \
+  --root stock.jp v04-promotion \
+  --write-evidence stock.jp/operations/private/evidence/v04-promotion.json
+~~~
+
+再生結果は holdout の事前宣言、閾値凍結日時、再調整0回を持ち、v0.2/v0.4双方のreturn、maximum drawdown、1銘柄・業種の最大損失寄与を含める。本人は v0.4 の資金配分による損失増幅、戦略待機資金が安全資産でないこと、過去診断が前向きPAPERを代替しないことを確認する。
+
+review は再生結果、履歴再生受入証跡、12か月PAPER証跡のSHA-256へ拘束する。いずれかを更新すると再承認が必要になる。判定は成績が正なら自動昇格するものではなく、本人が `PROMOTE_V0_4_TO_LIVE` を明示した場合だけ合格する。

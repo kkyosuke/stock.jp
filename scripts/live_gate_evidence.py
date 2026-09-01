@@ -32,6 +32,7 @@ SHADOW_RUN_GATE = "twenty_day_shadow_run"
 OFFICIAL_COVERAGE_GATE = "official_source_coverage"
 REPOSITORY_RECOVERY_GATE = "private_repository_recovery"
 PERSONAL_RISK_GATE = "personal_risk_and_broker_check"
+V04_PROMOTION_GATE = "v04_holdout_promotion"
 OFFICIAL_SOURCE_NAMES = ("tdnet", "edinet", "company_ir", "jpx")
 OFFICIAL_SOURCE_ALIASES = {
     "tdnet": "tdnet",
@@ -1291,6 +1292,198 @@ def evaluate_personal_risk(
     )
 
 
+def evaluate_v04_promotion(
+    *,
+    root: Path = PROJECT_ROOT,
+    replay_path: Path | None = None,
+    historical_evidence_path: Path | None = None,
+    paper_evidence_path: Path | None = None,
+    review_path: Path | None = None,
+) -> dict[str, Any]:
+    """Validate an explicit v0.4 holdout promotion bound to accepted evidence."""
+    root = root.resolve()
+    private_root = (root / "operations/private").resolve()
+    replay_path = replay_path or (
+        root / "data/historical-replay/replay-result-2025-2026.json"
+    )
+    historical_evidence_path = historical_evidence_path or (
+        private_root / "evidence/historical-replay.json"
+    )
+    paper_evidence_path = paper_evidence_path or (
+        private_root / "evidence/paper-12-months.json"
+    )
+    review_path = review_path or (private_root / "evidence/v04-holdout-review.json")
+    blockers: list[str] = []
+    inputs: list[dict[str, str]] = []
+    documents: dict[str, dict[str, Any]] = {}
+    for role, path, allowed_root in (
+        ("replay_result", replay_path, root),
+        ("historical_replay_evidence", historical_evidence_path, private_root),
+        ("paper_duration_evidence", paper_evidence_path, private_root),
+        ("v04_holdout_review", review_path, private_root),
+    ):
+        try:
+            path.resolve().relative_to(allowed_root)
+        except ValueError:
+            blockers.append(f"{role} path is outside its allowed root")
+        if not path.is_file():
+            blockers.append(f"{role} is missing: {path}")
+            documents[role] = {}
+            continue
+        try:
+            documents[role] = _read_object(path)
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            blockers.append(f"{role} is invalid: {error}")
+            documents[role] = {}
+            continue
+        inputs.append(
+            {
+                "role": role,
+                "path": os.path.relpath(path.resolve(), root),
+                "sha256": _sha256(path),
+            }
+        )
+
+    replay = documents["replay_result"]
+    historical = documents["historical_replay_evidence"]
+    paper = documents["paper_duration_evidence"]
+    review = documents["v04_holdout_review"]
+    if replay:
+        if replay.get("schema_version") != "1.0" or replay.get("status") != "COMPLETED":
+            blockers.append("v0.4 promotion requires a completed replay schema 1.0")
+        if replay.get("rule_version") != "v0.4":
+            blockers.append("v0.4 promotion replay rule_version must be v0.4")
+        period = replay.get("period", {})
+        if period != {"from": "2025-01-01", "through": "2026-08-31"}:
+            blockers.append("v0.4 promotion requires the fixed 2025-2026 holdout")
+        holdout = replay.get("holdout")
+        if not isinstance(holdout, dict):
+            holdout = {}
+            blockers.append("replay holdout metadata is required")
+        if holdout.get("predeclared") is not True:
+            blockers.append("replay holdout.predeclared must be true")
+        if holdout.get("retuning_count") != 0:
+            blockers.append("replay holdout.retuning_count must be 0")
+        if not _aware_datetime(holdout.get("thresholds_frozen_at_jst")):
+            blockers.append("holdout thresholds_frozen_at_jst must include a UTC offset")
+        elif _parse_aware_datetime(holdout["thresholds_frozen_at_jst"]).date() >= date(
+            2025, 1, 1
+        ):
+            blockers.append("holdout thresholds must be frozen before the holdout period")
+        if not _aware_datetime(replay.get("generated_at_jst")):
+            blockers.append("replay generated_at_jst must include a UTC offset")
+        comparisons = replay.get("comparisons")
+        if not isinstance(comparisons, dict):
+            comparisons = {}
+            blockers.append("replay comparisons must be an object")
+        required_metrics = (
+            "return_pct",
+            "maximum_drawdown_pct",
+            "maximum_single_name_loss_contribution_pct",
+            "maximum_industry_loss_contribution_pct",
+        )
+        for version in ("v0.2", "v0.4"):
+            version_metrics = comparisons.get(version)
+            if not isinstance(version_metrics, dict):
+                version_metrics = {}
+                blockers.append(f"replay comparisons.{version} must be an object")
+            for name in required_metrics:
+                value = version_metrics.get(name)
+                if (
+                    not isinstance(value, (int, float))
+                    or isinstance(value, bool)
+                    or not math.isfinite(value)
+                ):
+                    blockers.append(f"replay comparisons.{version}.{name} must be numeric")
+    else:
+        comparisons = {}
+
+    for role, evidence, expected_gate in (
+        ("historical replay", historical, HISTORICAL_REPLAY_GATE),
+        ("paper duration", paper, PAPER_DURATION_GATE),
+    ):
+        if evidence:
+            if evidence.get("schema_version") != "1.0":
+                blockers.append(f"{role} evidence schema_version must be 1.0")
+            if evidence.get("gate") != expected_gate or evidence.get("eligible") is not True:
+                blockers.append(f"{role} evidence is not eligible")
+            if evidence.get("blockers") != []:
+                blockers.append(f"{role} evidence contains blockers")
+
+    if review:
+        if review.get("schema_version") != "1.0":
+            blockers.append("v0.4 review schema_version must be 1.0")
+        if review.get("decision") != "PROMOTE_V0_4_TO_LIVE":
+            blockers.append("v0.4 review decision must be PROMOTE_V0_4_TO_LIVE")
+        if review.get("rule_version") != "v0.4":
+            blockers.append("v0.4 review rule_version must be v0.4")
+        if not isinstance(review.get("approved_by"), str) or not review.get(
+            "approved_by", ""
+        ).strip():
+            blockers.append("v0.4 review approved_by is required")
+        if not _aware_datetime(review.get("approved_at_jst")):
+            blockers.append("v0.4 review approved_at_jst must include a UTC offset")
+        elif _aware_datetime(replay.get("generated_at_jst")) and _parse_aware_datetime(
+            review["approved_at_jst"]
+        ) < _parse_aware_datetime(replay["generated_at_jst"]):
+            blockers.append("v0.4 review cannot precede replay generation")
+        for name, path in (
+            ("replay_result_sha256", replay_path),
+            ("historical_replay_evidence_sha256", historical_evidence_path),
+            ("paper_duration_evidence_sha256", paper_evidence_path),
+        ):
+            if not path.is_file() or review.get(name) != _sha256(path):
+                blockers.append(f"v0.4 review {name} does not match")
+        acknowledgements = review.get("acknowledgements")
+        if not isinstance(acknowledgements, dict):
+            acknowledgements = {}
+            blockers.append("v0.4 review acknowledgements must be an object")
+        required_acknowledgements = (
+            "allocation_amplification_reviewed",
+            "maximum_drawdown_reviewed",
+            "single_name_concentration_loss_reviewed",
+            "industry_concentration_loss_reviewed",
+            "waiting_cash_is_not_safe_asset",
+            "allocation_diagnostic_does_not_replace_forward_paper",
+            "no_holdout_retuning",
+        )
+        for name in required_acknowledgements:
+            if acknowledgements.get(name) is not True:
+                blockers.append(f"v0.4 acknowledgement {name} must be true")
+        reviewed_metrics = review.get("accepted_v04_metrics")
+        v04_metrics = comparisons.get("v0.4", {})
+        if not isinstance(reviewed_metrics, dict):
+            reviewed_metrics = {}
+            blockers.append("v0.4 review accepted_v04_metrics must be an object")
+        for name in (
+            "maximum_drawdown_pct",
+            "maximum_single_name_loss_contribution_pct",
+            "maximum_industry_loss_contribution_pct",
+        ):
+            if reviewed_metrics.get(name) != v04_metrics.get(name):
+                blockers.append(f"v0.4 accepted metric does not match replay: {name}")
+    else:
+        required_acknowledgements = ()
+        acknowledgements = {}
+
+    return _result(
+        gate=V04_PROMOTION_GATE,
+        blockers=blockers,
+        metrics={
+            "decision": review.get("decision"),
+            "approved_at_jst": review.get("approved_at_jst"),
+            "v02": comparisons.get("v0.2"),
+            "v04": comparisons.get("v0.4"),
+            "acknowledgement_count": len(required_acknowledgements),
+            "acknowledged_count": sum(
+                acknowledgements.get(name) is True
+                for name in required_acknowledgements
+            ),
+        },
+        inputs=inputs,
+    )
+
+
 def write_private_evidence(*, root: Path, path: Path, result: dict[str, Any]) -> None:
     """Write only successful evidence, and only below operations/private/evidence."""
     if result.get("eligible") is not True:
@@ -1354,6 +1547,14 @@ def _build_parser() -> argparse.ArgumentParser:
     personal.add_argument("--checklist", type=Path)
     personal.add_argument("--at", type=str)
     personal.add_argument("--write-evidence", type=Path)
+    promotion = subparsers.add_parser(
+        "v04-promotion", help="validate explicit v0.4 holdout promotion"
+    )
+    promotion.add_argument("--replay", type=Path)
+    promotion.add_argument("--historical-evidence", type=Path)
+    promotion.add_argument("--paper-evidence", type=Path)
+    promotion.add_argument("--review", type=Path)
+    promotion.add_argument("--write-evidence", type=Path)
     return parser
 
 
@@ -1396,6 +1597,14 @@ def main(argv: list[str] | None = None) -> int:
             root=args.root,
             checklist_path=args.checklist,
             at=_parse_aware_datetime(args.at) if args.at else None,
+        )
+    elif args.command == "v04-promotion":
+        result = evaluate_v04_promotion(
+            root=args.root,
+            replay_path=args.replay,
+            historical_evidence_path=args.historical_evidence,
+            paper_evidence_path=args.paper_evidence,
+            review_path=args.review,
         )
     else:  # pragma: no cover - argparse prevents this branch
         raise AssertionError(args.command)

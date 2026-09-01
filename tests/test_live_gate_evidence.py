@@ -17,6 +17,7 @@ from scripts.live_gate_evidence import (
     evaluate_point_in_time,
     evaluate_repository_recovery,
     evaluate_shadow_run,
+    evaluate_v04_promotion,
     write_private_evidence,
 )
 
@@ -646,6 +647,127 @@ class PersonalRiskEvidenceTest(unittest.TestCase):
             "personal risk limit maximum_single_name must be > 0 and <= 10",
             result["blockers"],
         )
+
+
+class V04PromotionEvidenceTest(unittest.TestCase):
+    def _write_promotion(self, root: Path) -> tuple[Path, Path, Path, Path]:
+        replay = {
+            "schema_version": "1.0",
+            "status": "COMPLETED",
+            "rule_version": "v0.4",
+            "generated_at_jst": "2026-08-31T21:00:00+09:00",
+            "period": {"from": "2025-01-01", "through": "2026-08-31"},
+            "holdout": {
+                "predeclared": True,
+                "thresholds_frozen_at_jst": "2024-12-31T15:30:00+09:00",
+                "retuning_count": 0,
+            },
+            "comparisons": {
+                "v0.2": {
+                    "return_pct": 4.0,
+                    "maximum_drawdown_pct": -8.0,
+                    "maximum_single_name_loss_contribution_pct": -1.0,
+                    "maximum_industry_loss_contribution_pct": -2.0,
+                },
+                "v0.4": {
+                    "return_pct": 8.0,
+                    "maximum_drawdown_pct": -25.0,
+                    "maximum_single_name_loss_contribution_pct": -7.0,
+                    "maximum_industry_loss_contribution_pct": -12.0,
+                },
+            },
+        }
+        replay_path = root / "data/historical-replay/replay-result-2025-2026.json"
+        _write(replay_path, json.dumps(replay))
+        historical_path = root / "operations/private/evidence/historical-replay.json"
+        paper_path = root / "operations/private/evidence/paper-12-months.json"
+        _write(
+            historical_path,
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "gate": "historical_replay_2025_2026_accepted",
+                    "eligible": True,
+                    "blockers": [],
+                }
+            ),
+        )
+        _write(
+            paper_path,
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "gate": "minimum_12_month_paper_trade",
+                    "eligible": True,
+                    "blockers": [],
+                }
+            ),
+        )
+        review = {
+            "schema_version": "1.0",
+            "decision": "PROMOTE_V0_4_TO_LIVE",
+            "rule_version": "v0.4",
+            "approved_by": "portfolio-owner",
+            "approved_at_jst": "2026-09-01T09:00:00+09:00",
+            "replay_result_sha256": hashlib.sha256(replay_path.read_bytes()).hexdigest(),
+            "historical_replay_evidence_sha256": hashlib.sha256(
+                historical_path.read_bytes()
+            ).hexdigest(),
+            "paper_duration_evidence_sha256": hashlib.sha256(
+                paper_path.read_bytes()
+            ).hexdigest(),
+            "acknowledgements": {
+                name: True
+                for name in (
+                    "allocation_amplification_reviewed",
+                    "maximum_drawdown_reviewed",
+                    "single_name_concentration_loss_reviewed",
+                    "industry_concentration_loss_reviewed",
+                    "waiting_cash_is_not_safe_asset",
+                    "allocation_diagnostic_does_not_replace_forward_paper",
+                    "no_holdout_retuning",
+                )
+            },
+            "accepted_v04_metrics": {
+                name: replay["comparisons"]["v0.4"][name]
+                for name in (
+                    "maximum_drawdown_pct",
+                    "maximum_single_name_loss_contribution_pct",
+                    "maximum_industry_loss_contribution_pct",
+                )
+            },
+        }
+        review_path = root / "operations/private/evidence/v04-holdout-review.json"
+        _write(review_path, json.dumps(review))
+        return replay_path, historical_path, paper_path, review_path
+
+    def test_bound_explicit_v04_promotion_is_eligible(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_promotion(root)
+            result = evaluate_v04_promotion(root=root)
+        self.assertTrue(result["eligible"], result["blockers"])
+        self.assertEqual(result["metrics"]["acknowledged_count"], 7)
+
+    def test_changed_replay_invalidates_promotion(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            replay_path, _, _, _ = self._write_promotion(root)
+            replay = json.loads(replay_path.read_text(encoding="utf-8"))
+            replay["comparisons"]["v0.4"]["maximum_drawdown_pct"] = -40.0
+            replay_path.write_text(json.dumps(replay), encoding="utf-8")
+            result = evaluate_v04_promotion(root=root)
+        self.assertFalse(result["eligible"])
+        self.assertIn("v0.4 review replay_result_sha256 does not match", result["blockers"])
+
+    def test_missing_12_month_evidence_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _, _, paper_path, _ = self._write_promotion(root)
+            paper_path.unlink()
+            result = evaluate_v04_promotion(root=root)
+        self.assertFalse(result["eligible"])
+        self.assertTrue(any("paper_duration_evidence is missing" in item for item in result["blockers"]))
 
 
 if __name__ == "__main__":
