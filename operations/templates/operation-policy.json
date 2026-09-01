@@ -1,8 +1,9 @@
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "operation_mode": "PAPER",
-  "active_rule_version": "v0.2",
+  "active_rule_version": "v0.4",
   "shadow_rule_versions": [
+    "v0.2",
     "v0.3"
   ],
   "broker_submission": "HUMAN_ONLY",
@@ -26,6 +27,7 @@
     "personal_risk_and_broker_check": null
   },
   "v03_holdout_promotion": false,
+  "v04_holdout_promotion": false,
   "approval": {
     "approved_by": null,
     "approved_at_jst": null,

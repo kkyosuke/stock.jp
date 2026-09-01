@@ -210,6 +210,25 @@ class OperationStateTest(unittest.TestCase):
             migrated["live_gates"]["historical_replay_2025_2026_accepted"]
         )
 
+    def test_migrates_legacy_policy_schema_without_promoting_v04(self) -> None:
+        initialize_or_migrate_workspace(self.root)
+        private = self.root / "operations/private"
+        policy_path = private / "operation-policy.json"
+        policy = json.loads(policy_path.read_text(encoding="utf-8"))
+        policy["schema_version"] = "1.0"
+        policy["active_rule_version"] = "v0.2"
+        policy["shadow_rule_versions"] = ["v0.3"]
+        policy.pop("v04_holdout_promotion")
+        policy_path.write_text(json.dumps(policy) + "\n", encoding="utf-8")
+
+        result = initialize_or_migrate_workspace(self.root)
+        migrated = json.loads(policy_path.read_text(encoding="utf-8"))
+
+        self.assertIn("operations/private/operation-policy.json", result["migrated"])
+        self.assertEqual(migrated["schema_version"], "1.1")
+        self.assertEqual(migrated["active_rule_version"], "v0.2")
+        self.assertFalse(migrated["v04_holdout_promotion"])
+
 
 if __name__ == "__main__":
     unittest.main()

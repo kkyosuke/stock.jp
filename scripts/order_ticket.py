@@ -17,11 +17,13 @@ try:
     from scripts.nightly_artifacts import ACTION_FIELDS, TRADE_ACTIONS
     from scripts.operation_policy import policy_status
     from scripts.operation_state import initialize_or_migrate_workspace, secure_private_tree
+    from scripts.position_sizing import validate_purchase_increment
     from scripts.run_integrity import OPEN_TICKET_STATUSES, require_run_lease
 except ModuleNotFoundError:  # Direct execution from scripts/
     from nightly_artifacts import ACTION_FIELDS, TRADE_ACTIONS
     from operation_policy import policy_status
     from operation_state import initialize_or_migrate_workspace, secure_private_tree
+    from position_sizing import validate_purchase_increment
     from run_integrity import OPEN_TICKET_STATUSES, require_run_lease
 
 
@@ -162,6 +164,11 @@ def propose_order(
     if status["ticket_status"] == "BLOCKED":
         detail = ", ".join(status["live_gate_failures"]) or str(status["operation_mode"])
         raise PermissionError(f"operation policy blocks order tickets: {detail}")
+    validate_purchase_increment(
+        rule_version=str(policy["active_rule_version"]),
+        action=normalized_action,
+        position_pct=float(position_text),
+    )
 
     decision_path = root / decision_id.strip()
     decisions_root = (private / "decisions").resolve()

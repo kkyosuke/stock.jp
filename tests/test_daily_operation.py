@@ -189,7 +189,7 @@ def append_paper_order(
             "prepared_at_jst": "2026-08-31T18:50:00+09:00",
             "trade_date": "2026-09-01",
             "operation_mode": "PAPER",
-            "rule_version": "v0.2",
+            "rule_version": "v0.4",
             "code": code,
             "company": "Example",
             "side": "BUY",

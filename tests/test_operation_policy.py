@@ -22,7 +22,7 @@ class OperationPolicyTest(unittest.TestCase):
 
         self.assertTrue(status["valid"])
         self.assertEqual(status["operation_mode"], "PAPER")
-        self.assertEqual(status["active_rule_version"], "v0.2")
+        self.assertEqual(status["active_rule_version"], "v0.4")
         self.assertEqual(status["ticket_status"], "PAPER_PROPOSED")
         self.assertFalse(status["live_orders_allowed"])
 
@@ -38,6 +38,7 @@ class OperationPolicyTest(unittest.TestCase):
             "approved_at_jst": "2027-09-01T00:00:00+09:00",
             "evidence_path": "operations/private/approvals/live.md",
         }
+        policy["v04_holdout_promotion"] = True
         allowed = policy_status(policy)
 
         self.assertFalse(blocked["live_orders_allowed"])
@@ -62,6 +63,22 @@ class OperationPolicyTest(unittest.TestCase):
         policy["v03_holdout_promotion"] = True
         self.assertTrue(policy_status(policy)["live_orders_allowed"])
 
+    def test_v04_needs_separate_holdout_promotion(self) -> None:
+        policy = copy.deepcopy(self.policy)
+        policy["operation_mode"] = "LIVE"
+        for gate in policy["live_gates"]:
+            policy["live_gates"][gate] = True
+            policy["live_gate_evidence"][gate] = f"operations/private/evidence/{gate}.md"
+        policy["approval"] = {
+            "approved_by": "human",
+            "approved_at_jst": "2027-09-01T00:00:00+09:00",
+            "evidence_path": "operations/private/approvals/live.md",
+        }
+
+        self.assertIn("v04_holdout_promotion", policy_status(policy)["live_gate_failures"])
+        policy["v04_holdout_promotion"] = True
+        self.assertTrue(policy_status(policy)["live_orders_allowed"])
+
     def test_invalid_policy_is_rejected(self) -> None:
         self.policy["broker_submission"] = "AUTOMATIC"
         status = policy_status(self.policy)
@@ -71,7 +88,7 @@ class OperationPolicyTest(unittest.TestCase):
         self.assertEqual(status["ticket_status"], "BLOCKED")
 
     def test_rule_versions_and_policy_timestamps_are_validated(self) -> None:
-        self.policy["shadow_rule_versions"] = ["v0.2", "v0.3", "v0.3"]
+        self.policy["shadow_rule_versions"] = ["v0.2", "v0.3", "v0.4", "v0.3"]
         self.policy["effective_at_jst"] = "2026-08-31T00:00:00"
         self.policy["approval"]["approved_at_jst"] = "not-a-timestamp"
 

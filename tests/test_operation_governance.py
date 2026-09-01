@@ -34,8 +34,10 @@ class OperationGovernanceTest(unittest.TestCase):
             self.assertIn(phrase, self.text)
 
     def test_paper_baseline_and_ticket_boundary_are_explicit(self) -> None:
-        self.assertIn("`v0.2` は現行ベースライン", self.text)
-        self.assertIn("`v0.3` はシャドー比較専用", self.text)
+        self.assertIn("`v0.4`", self.text)
+        self.assertIn("現行PAPERベースライン", self.text)
+        self.assertIn("固定的な安全資産枠を0%", self.text)
+        self.assertIn("`v0.2`と`v0.3`はシャドー比較専用", self.text)
         self.assertIn("`PAPER_PROPOSED`", self.text)
         self.assertIn("証券会社へ入力しない", self.text)
 
