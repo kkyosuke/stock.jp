@@ -32,8 +32,8 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install dependency
-        run: python -m pip install "xlrd==2.0.2"
+      - name: Install dependencies
+        run: python -m pip install "xlrd==2.0.2" "certifi==2026.7.22" PyYAML
 
       - name: Collect all current TSE domestic stocks
         env:
@@ -53,10 +53,29 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Validate generated archive
+        env:
+          LOOKBACK_DAYS: ${{ inputs.lookback_days || '7' }}
+        run: |
+          python scripts/validate_scheduled_price_update.py \
+            --summary .cache/daily-price-summary.json \
+            --lookback-days "$LOOKBACK_DAYS"
+          python scripts/validate_daily_price_archive.py \
+            --archive data/daily-prices \
+            --source-label "scheduled Yahoo Finance archive" \
+            > .cache/daily-price-validation.json
+
+      - name: Run unit and integration tests before merge
+        run: |
+          python -m unittest discover -s tests -v
+          python -m compileall -q scripts tests
+          python scripts/operation_smoke.py --days 20 --start-date 2026-09-01
+
       - name: Create or update data pull request
+        id: data-pr
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
-          token: ${{ secrets.PR_TOKEN || github.token }}
+          token: ${{ github.token }}
           branch: automation/daily-stock-prices
           delete-branch: true
           commit-message: "data: update daily Japanese stock prices"
@@ -70,3 +89,15 @@ jobs:
             - 取得失敗: `latest.json` とCSVの `取得状態` を確認
           add-paths: |
             data/daily-prices
+
+      - name: Enable auto-merge after successful validation
+        if: steps.data-pr.outputs.pull-request-number != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.data-pr.outputs.pull-request-number }}
+        run: |
+          gh pr merge "$PR_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
+            --auto \
+            --squash \
+            --delete-branch

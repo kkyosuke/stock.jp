@@ -7,7 +7,7 @@
 
 ## 1. 結論
 
-GitHub Actionsが平日18:30にJPXの現行内国株式全体をYahoo Financeから取得し、日付別CSVの更新PRを作る。データPRを確認・マージして運用checkoutへ反映した後、利用者が同じチャットのローカルプロジェクトへ `$japan-stock-operator` を明示して1回依頼すれば、保存済み株価の検証、公式情報源、世界情勢、期限が来たレビュー、明日のアクション、今日のログ保存をまとめて実行できる。株価範囲は[Yahoo株価収集・監視範囲 v0.1](market-data-operation-v0.1.md)、判断フローは[夜間ワンショット運用 v0.1](nightly-operation-v0.1.md)に従う。
+GitHub Actionsが平日18:30にJPXの現行内国株式全体をYahoo Financeから取得し、日付別CSVの更新PRを作る。archiveと全回帰testが成功したPRだけをauto-mergeし、翌朝private側がpublic submodule更新PRをauto-mergeする。運用checkoutへ反映した後、利用者が同じチャットのローカルプロジェクトへ `$japan-stock-operator` を明示して1回依頼すれば、保存済み株価の検証、公式情報源、世界情勢、期限が来たレビュー、明日のアクション、今日のログ保存をまとめて実行できる。株価範囲は[Yahoo株価収集・監視範囲 v0.1](market-data-operation-v0.1.md)、判断フローは[夜間ワンショット運用 v0.1](nightly-operation-v0.1.md)に従う。
 
 日次タスクが行うのは情報収集、ルール判定、注文案の作成までである。証券会社への注文送信は行わない。`PAPER`では注文票を `PAPER_PROPOSED` とし、実際には入力しない。現行v0.4が引き継ぐ執行条件は翌営業日8:45〜8:55の注文前チェックを要求するため、その時間を確保できない利用者は`LIVE`へ昇格しない。注文時刻を柔軟にする案は凍結済みルールを直接変えず、別版で前向きPAPER検証する。
 
@@ -80,7 +80,7 @@ GitHub Actionsが平日18:30にJPXの現行内国株式全体をYahoo Financeか
 
 ## 4. 株価の定時収集とAIの一回指示
 
-株価の定時収集は`.github/workflows/daily-stock-prices.yml`を正本とする。平日18:30に全市場を取得し、成功時だけデータPRを作る。PRでは`latest.json`の取得エラー、母集団件数、正常価格件数、checksum、意図しない過去日変更がないことを確認する。マージ後、同じ日のAI実行前に永続checkoutへ最新`main`を反映する。PRが未マージ、checkoutが古い、active対象が欠損、または全市場coverageが98%未満ならreadinessが停止する。
+株価の定時収集は`.github/workflows/daily-stock-prices.yml`を正本とする。平日18:30に全市場を取得し、archive、全回帰test、compile、20日smokeが成功した場合だけデータPRを作成してauto-mergeする。失敗時はmergeせず、人が`latest.json`の取得エラー、母集団件数、正常価格件数、checksum、意図しない過去日変更を確認する。翌朝private側がpublic `main`のsubmodule pointer更新PRを検証してauto-mergeする。PRが未マージ、checkoutが古い、active対象が欠損、または全市場coverageが98%未満ならreadinessが停止する。
 
 Yahoo Financeは非公式の二次データである。PAPERの計算入力には使えるが、売買判断を確定する前に会社IR、TDnet、JPXの公式価格・コーポレートアクション、現物株カレンダー、EDINETを一次資料で確認する。確認不能な日は`WAIT`または`fail`とする。
 
