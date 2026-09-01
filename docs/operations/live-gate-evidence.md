@@ -124,3 +124,28 @@ stock.jp/.venv/bin/python stock.jp/scripts/live_gate_evidence.py \
 再生結果は holdout の事前宣言、閾値凍結日時、再調整0回を持ち、v0.2/v0.4双方のreturn、maximum drawdown、1銘柄・業種の最大損失寄与を含める。本人は v0.4 の資金配分による損失増幅、戦略待機資金が安全資産でないこと、過去診断が前向きPAPERを代替しないことを確認する。
 
 review は再生結果、履歴再生受入証跡、12か月PAPER証跡のSHA-256へ拘束する。いずれかを更新すると再承認が必要になる。判定は成績が正なら自動昇格するものではなく、本人が `PROMOTE_V0_4_TO_LIVE` を明示した場合だけ合格する。
+
+## 最終 LIVE 昇格
+
+各コマンドの合格結果を上記の既定 evidence path へ `--write-evidence` で保存する。最後に `live-approval-template.json` を `operations/private/evidence/live-approval.json` へコピーし、private/public commit、現在のPAPER policy、8証跡のSHA-256、本人の `LIVE` 判断を記入する。
+
+まず変更を加えない判定を実行する。
+
+~~~bash
+stock.jp/.venv/bin/python stock.jp/scripts/live_gate_evidence.py \
+  --root stock.jp promote-live \
+  --write-evidence stock.jp/operations/private/evidence/live-readiness.json
+~~~
+
+このコマンドは8条件を元データから再計算し、保存証跡の `gate / eligible / blockers / inputs` と一致すること、最終承認が全証跡と現在のPAPER policyのSHA-256に一致することを確認する。`eligible: true` を本人が確認した後だけ、同じ入力のまま明示的に適用する。
+
+~~~bash
+stock.jp/.venv/bin/python stock.jp/scripts/live_gate_evidence.py \
+  --root stock.jp promote-live --apply
+stock.jp/.venv/bin/python stock.jp/scripts/operation_policy.py status
+stock.jp/.venv/bin/python stock.jp/scripts/operation_bootstrap.py check
+~~~
+
+`--apply` は合格時だけ `operation-policy.json` を原子的に `LIVE` へ変更し、7 gate、v0.4 promotion、証跡path、承認者・日時を同時に設定する。不合格ならpolicyを変更しない。以後のbootstrapも最終承認のハッシュと各型付き証跡を検証し、ファイルを空で作るだけの昇格を拒否する。
+
+LIVE後も注文は自動送信されない。各 `PROPOSED` ticket は8:45〜8:55の pretrade check 後に本人が証券会社へ手入力し、blocking gap、復旧不能、本人状況や証券会社仕様の変更があれば `PAUSED` へ戻す。

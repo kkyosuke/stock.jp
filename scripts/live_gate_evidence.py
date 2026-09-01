@@ -21,6 +21,11 @@ try:
 except ModuleNotFoundError:  # Direct execution from scripts/
     from run_integrity import RunIntegrityError, validate_run_artifacts
 
+try:
+    from scripts.operation_policy import validate_policy
+except ModuleNotFoundError:  # Direct execution from scripts/
+    from operation_policy import validate_policy
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 JST = ZoneInfo("Asia/Tokyo")
@@ -33,6 +38,20 @@ OFFICIAL_COVERAGE_GATE = "official_source_coverage"
 REPOSITORY_RECOVERY_GATE = "private_repository_recovery"
 PERSONAL_RISK_GATE = "personal_risk_and_broker_check"
 V04_PROMOTION_GATE = "v04_holdout_promotion"
+LIVE_PROMOTION_GATE = "live_promotion"
+LIVE_REQUIREMENT_EVIDENCE = {
+    POINT_IN_TIME_GATE: "operations/private/evidence/point-in-time.json",
+    HISTORICAL_REPLAY_GATE: "operations/private/evidence/historical-replay.json",
+    PAPER_DURATION_GATE: "operations/private/evidence/paper-12-months.json",
+    SHADOW_RUN_GATE: "operations/private/evidence/shadow-20-days.json",
+    OFFICIAL_COVERAGE_GATE: "operations/private/evidence/official-coverage.json",
+    REPOSITORY_RECOVERY_GATE: "operations/private/evidence/repository-recovery.json",
+    PERSONAL_RISK_GATE: "operations/private/evidence/personal-risk.json",
+    V04_PROMOTION_GATE: "operations/private/evidence/v04-promotion.json",
+}
+POLICY_LIVE_GATES = tuple(
+    name for name in LIVE_REQUIREMENT_EVIDENCE if name != V04_PROMOTION_GATE
+)
 OFFICIAL_SOURCE_NAMES = ("tdnet", "edinet", "company_ir", "jpx")
 OFFICIAL_SOURCE_ALIASES = {
     "tdnet": "tdnet",
@@ -461,11 +480,15 @@ def evaluate_historical_replay(
 
 
 def evaluate_paper_duration(
-    *, root: Path = PROJECT_ROOT, history_path: Path | None = None
+    *,
+    root: Path = PROJECT_ROOT,
+    history_path: Path | None = None,
+    at: datetime | None = None,
 ) -> dict[str, Any]:
     """Require at least 365 elapsed days of recorded v0.4 PAPER operation."""
     root = root.resolve()
     private_root = (root / "operations/private").resolve()
+    reference_time = (at or datetime.now(tz=JST)).astimezone(JST)
     history_path = history_path or (private_root / "run-history.csv")
     blockers: list[str] = []
     inputs: list[dict[str, str]] = []
@@ -543,6 +566,12 @@ def evaluate_paper_duration(
         except ValueError:
             blockers.append(f"completed v0.4 PAPER run has invalid dates: {run_id}")
             continue
+        if run_id != price_date.isoformat():
+            blockers.append(f"completed PAPER run_id must equal price_date: {run_id}")
+            continue
+        if completed > reference_time or price_date > reference_time.date():
+            blockers.append(f"completed PAPER run cannot be in the future: {run_id}")
+            continue
         report_value = row.get("report_path", "").strip()
         if not report_value:
             blockers.append(f"completed run report path is unsafe: {run_id}")
@@ -552,6 +581,10 @@ def evaluate_paper_duration(
             report.relative_to(private_root)
         except ValueError:
             blockers.append(f"completed run report is outside private storage: {run_id}")
+            continue
+        expected_report = (private_root / "runs" / run_id / "report.md").resolve()
+        if report != expected_report:
+            blockers.append(f"completed run report path does not match run_id: {run_id}")
             continue
         if not report.is_file():
             blockers.append(f"completed run report is missing: {run_id}")
@@ -706,6 +739,8 @@ def evaluate_shadow_run(
             blockers.append(
                 "latest shadow runs do not cover 20 consecutive tracked trading sessions"
             )
+        if archive_dates and selected_dates[-1] != max(archive_dates):
+            blockers.append("shadow window does not end at the latest tracked price session")
     else:
         expected_dates = []
 
@@ -1259,6 +1294,10 @@ def evaluate_personal_risk(
         blockers.append("broker_rules_checked_at_jst must include a UTC offset")
     if rules_checked and reviewed and rules_checked.date() != reviewed.date():
         blockers.append("broker rules must be checked on the review date")
+    if rules_checked and reviewed and rules_checked > reviewed:
+        blockers.append("broker rules must be checked before completing the review")
+    if rules_checked and rules_checked > reference_time:
+        blockers.append("broker_rules_checked_at_jst cannot be in the future")
     if not isinstance(checklist.get("emergency_contact_location"), str) or not checklist.get(
         "emergency_contact_location", ""
     ).strip():
@@ -1423,10 +1462,13 @@ def evaluate_v04_promotion(
             blockers.append("v0.4 review approved_by is required")
         if not _aware_datetime(review.get("approved_at_jst")):
             blockers.append("v0.4 review approved_at_jst must include a UTC offset")
-        elif _aware_datetime(replay.get("generated_at_jst")) and _parse_aware_datetime(
-            review["approved_at_jst"]
-        ) < _parse_aware_datetime(replay["generated_at_jst"]):
-            blockers.append("v0.4 review cannot precede replay generation")
+            promotion_approved_at = None
+        else:
+            promotion_approved_at = _parse_aware_datetime(review["approved_at_jst"])
+            if _aware_datetime(replay.get("generated_at_jst")) and promotion_approved_at < _parse_aware_datetime(
+                replay["generated_at_jst"]
+            ):
+                blockers.append("v0.4 review cannot precede replay generation")
         for name, path in (
             ("replay_result_sha256", replay_path),
             ("historical_replay_evidence_sha256", historical_evidence_path),
@@ -1434,6 +1476,19 @@ def evaluate_v04_promotion(
         ):
             if not path.is_file() or review.get(name) != _sha256(path):
                 blockers.append(f"v0.4 review {name} does not match")
+        for role, evidence in (
+            ("historical replay", historical),
+            ("paper duration", paper),
+        ):
+            evaluated_at = evidence.get("evaluated_at_jst")
+            if evidence and not _aware_datetime(evaluated_at):
+                blockers.append(f"{role} evidence evaluated_at_jst is invalid")
+            elif (
+                evidence
+                and promotion_approved_at
+                and promotion_approved_at < _parse_aware_datetime(evaluated_at)
+            ):
+                blockers.append(f"v0.4 review predates {role} evidence")
         acknowledgements = review.get("acknowledgements")
         if not isinstance(acknowledgements, dict):
             acknowledgements = {}
@@ -1505,6 +1560,350 @@ def write_private_evidence(*, root: Path, path: Path, result: dict[str, Any]) ->
     temporary_path.replace(target)
 
 
+def _atomic_write_object(path: Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=path.parent, delete=False
+    ) as temporary:
+        json.dump(value, temporary, ensure_ascii=False, indent=2)
+        temporary.write("\n")
+        temporary_path = Path(temporary.name)
+    temporary_path.chmod(0o600)
+    temporary_path.replace(path)
+
+
+def evaluate_all_live_requirements(*, root: Path = PROJECT_ROOT) -> dict[str, dict[str, Any]]:
+    """Re-evaluate every pre-promotion requirement from its current source data."""
+    return {
+        POINT_IN_TIME_GATE: evaluate_point_in_time(root=root),
+        HISTORICAL_REPLAY_GATE: evaluate_historical_replay(root=root),
+        PAPER_DURATION_GATE: evaluate_paper_duration(root=root),
+        SHADOW_RUN_GATE: evaluate_shadow_run(root=root),
+        OFFICIAL_COVERAGE_GATE: evaluate_official_coverage(root=root),
+        REPOSITORY_RECOVERY_GATE: evaluate_repository_recovery(root=root),
+        PERSONAL_RISK_GATE: evaluate_personal_risk(root=root),
+        V04_PROMOTION_GATE: evaluate_v04_promotion(root=root),
+    }
+
+
+def _evidence_core(evidence: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": evidence.get("schema_version"),
+        "gate": evidence.get("gate"),
+        "eligible": evidence.get("eligible"),
+        "blockers": evidence.get("blockers"),
+        "inputs": evidence.get("inputs"),
+    }
+
+
+def evaluate_live_promotion(
+    *,
+    root: Path = PROJECT_ROOT,
+    approval_path: Path | None = None,
+    policy_path: Path | None = None,
+) -> dict[str, Any]:
+    """Re-run every gate and validate the owner's final LIVE approval bundle."""
+    root = root.resolve()
+    private_root = (root / "operations/private").resolve()
+    approval_path = approval_path or (private_root / "evidence/live-approval.json")
+    policy_path = policy_path or (private_root / "operation-policy.json")
+    blockers: list[str] = []
+    inputs: list[dict[str, str]] = []
+    try:
+        approval_path.resolve().relative_to(private_root / "evidence")
+        policy_path.resolve().relative_to(private_root)
+    except ValueError:
+        blockers.append("approval and policy paths must stay under operations/private")
+
+    if not policy_path.is_file():
+        policy: dict[str, Any] = {}
+        blockers.append(f"operation policy is missing: {policy_path}")
+    else:
+        try:
+            policy = _read_object(policy_path)
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            policy = {}
+            blockers.append(f"operation policy is invalid: {error}")
+        else:
+            inputs.append(
+                {
+                    "role": "pre_promotion_policy",
+                    "path": "operations/private/operation-policy.json",
+                    "sha256": _sha256(policy_path),
+                }
+            )
+            blockers.extend(f"operation policy: {item}" for item in validate_policy(policy))
+            if policy.get("operation_mode") != "PAPER":
+                blockers.append("operation_mode must still be PAPER before promotion")
+            if policy.get("active_rule_version") != "v0.4":
+                blockers.append("active_rule_version must be v0.4")
+            if policy.get("broker_submission") != "HUMAN_ONLY":
+                blockers.append("broker_submission must remain HUMAN_ONLY")
+
+    fresh = evaluate_all_live_requirements(root=root)
+    stored: dict[str, dict[str, Any]] = {}
+    for gate, relative in LIVE_REQUIREMENT_EVIDENCE.items():
+        path = (root / relative).resolve()
+        private_evidence_root = (private_root / "evidence").resolve()
+        try:
+            path.relative_to(private_evidence_root)
+        except ValueError:
+            blockers.append(f"stored evidence path escaped private storage: {gate}")
+            stored[gate] = {}
+            continue
+        if not path.is_file():
+            blockers.append(f"stored evidence is missing: {gate}")
+            stored[gate] = {}
+            continue
+        try:
+            evidence = _read_object(path)
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            blockers.append(f"stored evidence is invalid for {gate}: {error}")
+            stored[gate] = {}
+            continue
+        stored[gate] = evidence
+        current = fresh.get(gate, {})
+        if current.get("eligible") is not True:
+            blockers.append(f"current requirement is not eligible: {gate}")
+        if _evidence_core(evidence) != _evidence_core(current):
+            blockers.append(f"stored evidence is stale or does not match: {gate}")
+        inputs.append(
+            {"role": gate, "path": relative, "sha256": _sha256(path)}
+        )
+
+    if not approval_path.is_file():
+        approval: dict[str, Any] = {}
+        blockers.append(f"final LIVE approval is missing: {approval_path}")
+    else:
+        try:
+            approval = _read_object(approval_path)
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            approval = {}
+            blockers.append(f"final LIVE approval is invalid: {error}")
+        else:
+            inputs.append(
+                {
+                    "role": "final_live_approval",
+                    "path": "operations/private/evidence/live-approval.json",
+                    "sha256": _sha256(approval_path),
+                }
+            )
+    if approval:
+        if approval.get("schema_version") != "1.0":
+            blockers.append("final approval schema_version must be 1.0")
+        if approval.get("decision") != "LIVE":
+            blockers.append("final approval decision must be LIVE")
+        if approval.get("rule_version") != "v0.4":
+            blockers.append("final approval rule_version must be v0.4")
+        if approval.get("broker_submission") != "HUMAN_ONLY":
+            blockers.append("final approval broker_submission must be HUMAN_ONLY")
+        if not isinstance(approval.get("approved_by"), str) or not approval.get(
+            "approved_by", ""
+        ).strip():
+            blockers.append("final approval approved_by is required")
+        if not _aware_datetime(approval.get("approved_at_jst")):
+            blockers.append("final approval approved_at_jst must include a UTC offset")
+            approved_at = None
+        else:
+            approved_at = _parse_aware_datetime(approval["approved_at_jst"])
+            if approved_at > datetime.now(tz=JST):
+                blockers.append("final approval approved_at_jst cannot be in the future")
+        for name in ("private_commit_reviewed", "public_submodule_commit_reviewed"):
+            value = approval.get(name)
+            if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{40}", value):
+                blockers.append(f"final approval {name} must be a full commit SHA")
+        if policy_path.is_file() and approval.get(
+            "pre_promotion_policy_sha256"
+        ) != _sha256(policy_path):
+            blockers.append("final approval does not bind the current PAPER policy")
+        approved_evidence = approval.get("evidence")
+        if not isinstance(approved_evidence, dict):
+            approved_evidence = {}
+            blockers.append("final approval evidence must be an object")
+        for gate, relative in LIVE_REQUIREMENT_EVIDENCE.items():
+            item = approved_evidence.get(gate)
+            path = root / relative
+            if not isinstance(item, dict):
+                blockers.append(f"final approval evidence is missing: {gate}")
+                continue
+            if item.get("path") != relative:
+                blockers.append(f"final approval evidence path mismatch: {gate}")
+            if not path.is_file() or item.get("sha256") != _sha256(path):
+                blockers.append(f"final approval evidence hash mismatch: {gate}")
+            evaluated_at = stored.get(gate, {}).get("evaluated_at_jst")
+            if approved_at and _aware_datetime(evaluated_at):
+                if approved_at < _parse_aware_datetime(evaluated_at):
+                    blockers.append(f"final approval predates evidence: {gate}")
+            elif stored.get(gate):
+                blockers.append(f"stored evidence evaluated_at_jst is invalid: {gate}")
+        acknowledgements = approval.get("acknowledgements")
+        if not isinstance(acknowledgements, dict):
+            acknowledgements = {}
+            blockers.append("final approval acknowledgements must be an object")
+        required_acknowledgements = (
+            "all_requirement_evidence_reviewed",
+            "first_live_order_requires_pretrade_check",
+            "human_only_submission",
+            "pause_on_any_blocking_gap",
+            "no_automatic_order_submission",
+            "live_decision_is_not_a_profit_guarantee",
+        )
+        for name in required_acknowledgements:
+            if acknowledgements.get(name) is not True:
+                blockers.append(f"final approval acknowledgement {name} must be true")
+    else:
+        required_acknowledgements = ()
+        acknowledgements = {}
+
+    return _result(
+        gate=LIVE_PROMOTION_GATE,
+        blockers=blockers,
+        metrics={
+            "requirement_count": len(LIVE_REQUIREMENT_EVIDENCE),
+            "eligible_requirement_count": sum(
+                result.get("eligible") is True for result in fresh.values()
+            ),
+            "decision": approval.get("decision"),
+            "approved_by": approval.get("approved_by"),
+            "approved_at_jst": approval.get("approved_at_jst"),
+            "acknowledgement_count": len(required_acknowledgements),
+            "acknowledged_count": sum(
+                acknowledgements.get(name) is True
+                for name in required_acknowledgements
+            ),
+        },
+        inputs=inputs,
+    )
+
+
+def validate_promoted_evidence_bundle(
+    *, root: Path, policy: dict[str, Any]
+) -> list[str]:
+    """Validate immutable promotion evidence during subsequent LIVE bootstraps."""
+    root = root.resolve()
+    private_root = (root / "operations/private").resolve()
+    failures: list[str] = []
+    approval_relative = policy.get("approval", {}).get("evidence_path")
+    if not isinstance(approval_relative, str):
+        return ["typed LIVE approval evidence path is missing"]
+    approval_path = (root / approval_relative).resolve()
+    try:
+        approval_path.relative_to(private_root / "evidence")
+    except ValueError:
+        return ["typed LIVE approval evidence path is outside private evidence"]
+    if not approval_path.is_file():
+        return ["typed LIVE approval evidence file is missing"]
+    try:
+        approval = _read_object(approval_path)
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        return [f"typed LIVE approval evidence is invalid: {error}"]
+    if approval.get("decision") != "LIVE":
+        failures.append("typed LIVE approval decision is not LIVE")
+    if approval.get("schema_version") != "1.0":
+        failures.append("typed LIVE approval schema_version is not 1.0")
+    if approval.get("broker_submission") != "HUMAN_ONLY":
+        failures.append("typed LIVE approval broker_submission is not HUMAN_ONLY")
+    if approval.get("approved_by") != policy.get("approval", {}).get("approved_by"):
+        failures.append("typed LIVE approval approved_by differs from policy")
+    if approval.get("approved_at_jst") != policy.get("approval", {}).get(
+        "approved_at_jst"
+    ):
+        failures.append("typed LIVE approval timestamp differs from policy")
+    if approval.get("rule_version") != policy.get("active_rule_version"):
+        failures.append("typed LIVE approval rule_version differs from policy")
+    for name in ("private_commit_reviewed", "public_submodule_commit_reviewed"):
+        value = approval.get(name)
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{40}", value):
+            failures.append(f"typed LIVE approval {name} is not a full commit SHA")
+    required_acknowledgements = (
+        "all_requirement_evidence_reviewed",
+        "first_live_order_requires_pretrade_check",
+        "human_only_submission",
+        "pause_on_any_blocking_gap",
+        "no_automatic_order_submission",
+        "live_decision_is_not_a_profit_guarantee",
+    )
+    acknowledgements = approval.get("acknowledgements", {})
+    for name in required_acknowledgements:
+        if acknowledgements.get(name) is not True:
+            failures.append(f"typed LIVE approval acknowledgement is false: {name}")
+    approved_evidence = approval.get("evidence", {})
+    for gate, expected_relative in LIVE_REQUIREMENT_EVIDENCE.items():
+        item = approved_evidence.get(gate, {})
+        relative = item.get("path")
+        if relative != expected_relative:
+            failures.append(f"typed evidence path mismatch: {gate}")
+            continue
+        if gate in POLICY_LIVE_GATES and policy.get("live_gate_evidence", {}).get(
+            gate
+        ) != relative:
+            failures.append(f"policy evidence path mismatch: {gate}")
+        path = (root / relative).resolve()
+        try:
+            path.relative_to(private_root / "evidence")
+        except ValueError:
+            failures.append(f"typed evidence path escaped private storage: {gate}")
+            continue
+        if not path.is_file():
+            failures.append(f"typed evidence file is missing: {gate}")
+            continue
+        if item.get("sha256") != _sha256(path):
+            failures.append(f"typed evidence hash mismatch: {gate}")
+            continue
+        try:
+            evidence = _read_object(path)
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            failures.append(f"typed evidence is invalid for {gate}: {error}")
+            continue
+        if (
+            evidence.get("schema_version") != "1.0"
+            or evidence.get("gate") != gate
+            or evidence.get("eligible") is not True
+            or evidence.get("blockers") != []
+        ):
+            failures.append(f"typed evidence is not an eligible {gate} result")
+    return failures
+
+
+def apply_live_promotion(
+    *, root: Path, result: dict[str, Any], approval_path: Path, policy_path: Path
+) -> dict[str, Any]:
+    """Atomically promote a PAPER policy only after the full guard passes."""
+    if result.get("eligible") is not True:
+        raise ValueError("ineligible LIVE promotion cannot be applied")
+    root = root.resolve()
+    approval = _read_object(approval_path)
+    policy = _read_object(policy_path)
+    if policy.get("operation_mode") != "PAPER":
+        raise ValueError("only a PAPER policy can be promoted")
+    if approval.get("pre_promotion_policy_sha256") != _sha256(policy_path):
+        raise ValueError("approval does not bind the current policy")
+    policy["operation_mode"] = "LIVE"
+    policy["effective_at_jst"] = approval["approved_at_jst"]
+    policy["active_rule_version"] = "v0.4"
+    policy["broker_submission"] = "HUMAN_ONLY"
+    for gate in POLICY_LIVE_GATES:
+        policy["live_gates"][gate] = True
+        policy["live_gate_evidence"][gate] = LIVE_REQUIREMENT_EVIDENCE[gate]
+    policy["v04_holdout_promotion"] = True
+    approval_private_relative = approval_path.resolve().relative_to(
+        (root / "operations/private").resolve()
+    )
+    policy["approval"] = {
+        "approved_by": approval["approved_by"],
+        "approved_at_jst": approval["approved_at_jst"],
+        "evidence_path": (Path("operations/private") / approval_private_relative).as_posix(),
+    }
+    errors = validate_policy(policy)
+    if errors:
+        raise ValueError("promoted policy is invalid: " + "; ".join(errors))
+    bundle_failures = validate_promoted_evidence_bundle(root=root, policy=policy)
+    if bundle_failures:
+        raise ValueError("promoted evidence is invalid: " + "; ".join(bundle_failures))
+    _atomic_write_object(policy_path, policy)
+    return policy
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=PROJECT_ROOT)
@@ -1524,6 +1923,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "paper-duration", help="validate at least 12 months of v0.4 PAPER runs"
     )
     paper_duration.add_argument("--history", type=Path)
+    paper_duration.add_argument("--at", type=str)
     paper_duration.add_argument("--write-evidence", type=Path)
     shadow = subparsers.add_parser(
         "shadow-run", help="validate 20 consecutive real-data PAPER sessions"
@@ -1555,6 +1955,13 @@ def _build_parser() -> argparse.ArgumentParser:
     promotion.add_argument("--paper-evidence", type=Path)
     promotion.add_argument("--review", type=Path)
     promotion.add_argument("--write-evidence", type=Path)
+    live = subparsers.add_parser(
+        "promote-live", help="validate all requirements and optionally apply LIVE mode"
+    )
+    live.add_argument("--approval", type=Path)
+    live.add_argument("--policy", type=Path)
+    live.add_argument("--apply", action="store_true")
+    live.add_argument("--write-evidence", type=Path)
     return parser
 
 
@@ -1575,6 +1982,7 @@ def main(argv: list[str] | None = None) -> int:
         result = evaluate_paper_duration(
             root=args.root,
             history_path=args.history,
+            at=_parse_aware_datetime(args.at) if args.at else None,
         )
     elif args.command == "shadow-run":
         result = evaluate_shadow_run(
@@ -1606,6 +2014,25 @@ def main(argv: list[str] | None = None) -> int:
             paper_evidence_path=args.paper_evidence,
             review_path=args.review,
         )
+    elif args.command == "promote-live":
+        approval_path = args.approval or (
+            args.root / "operations/private/evidence/live-approval.json"
+        )
+        policy_path = args.policy or (
+            args.root / "operations/private/operation-policy.json"
+        )
+        result = evaluate_live_promotion(
+            root=args.root,
+            approval_path=approval_path,
+            policy_path=policy_path,
+        )
+        if args.apply and result["eligible"]:
+            apply_live_promotion(
+                root=args.root,
+                result=result,
+                approval_path=approval_path,
+                policy_path=policy_path,
+            )
     else:  # pragma: no cover - argparse prevents this branch
         raise AssertionError(args.command)
     if args.write_evidence:
