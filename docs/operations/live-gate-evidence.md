@@ -23,3 +23,17 @@ stock.jp/.venv/bin/python stock.jp/scripts/live_gate_evidence.py \
 manifest や成果物を後から変更すると検証は失敗する。現在は必要な公式データが揃っていないため、証跡を作らず gate を `false` のまま維持する。
 
 証跡の書き込み先は private の `operations/private/evidence/` 配下だけに制限される。公開 Actions では検証ロジックと fixture の回帰テストだけを行い、実口座・判断情報を artifact にしない。
+
+## 2025〜2026年の履歴再生受入
+
+`historical_replay_2025_2026_accepted` は、固定期間 `2025-01-01`〜`2026-08-31` の v0.4 再生結果と、利用者の private review の両方を検証する。
+
+~~~bash
+stock.jp/.venv/bin/python stock.jp/scripts/live_gate_evidence.py \
+  --root stock.jp historical-replay \
+  --write-evidence stock.jp/operations/private/evidence/historical-replay.json
+~~~
+
+公開側の `data/historical-replay/replay-result-2025-2026.json` は、point-in-time manifest のハッシュ、欠損・look-ahead 違反0件、取引数、return、maximum drawdown、benchmark と、取引・月次・metrics 成果物のハッシュを持つ。private 側の `historical-replay-review.json` には、現在の再生結果のハッシュ、`ACCEPT`、承認者・承認日時、drawdown・集中損失・データ制約を確認した事実を記録する。
+
+再生結果を変更すると過去の review は無効になる。成績の数値だけでは自動受入せず、利用者の review がない状態では gate を `false` のままにする。
