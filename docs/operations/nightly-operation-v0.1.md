@@ -12,7 +12,7 @@
 
 ## 1. 1回の処理
 
-1. `operation_bootstrap.py check`でPAPER readinessを確認する。マージ済みYahoo全市場archiveのchecksum、98%以上の全体coverage、保有＋active watchlistの100% coverage、7日以内の鮮度、31日以内の検証済みバックアップに不足があれば開始しない。
+1. `operation_bootstrap.py check`でPAPER readinessを確認する。マージ済みYahoo全市場archiveのchecksum、98%以上の全体coverage、保有＋active watchlistの100% coverage、7日以内の鮮度に不足があれば開始しない。
 2. `nightly_operation.py start`でreadinessを再確認し、状態検証、同時実行ロック、当日フォルダ作成、EDINET取得、一次サイト確認タスク、期限到来タスクを一括作成する。
 3. `research-queue.json`と`work-plan.json`を一次資料で処理し、会社IR、TDnet、公式価格・コーポレートアクション、EDINET、JPX現物株カレンダーを確認する。YahooはPAPERの二次価格源であり、一次資料確認の代替にしない。完了できない項目は理由と期限を付けて`DEFERRED`にし、同じIDを`handoff.pending_reviews`へ残す。
 4. `global-risk.md`へ為替、金利、資源、主要国政策、地政学を「事実→保有KPIへの伝播→判断」に分けて記録する。
@@ -111,4 +111,4 @@ $japan-stock-operator を使って、今日の夜間運用を最後まで実行�
 
 APIの成功は企業IRとJPX個別確認の代替ではない。売買判断に使う事実は一次資料へ結び付ける。
 
-バックアップ、実行漏れ検知、初回診断、20営業日試験は[継続稼働準備 v0.1](operation-readiness-v0.1.md)に従う。
+private repository の同期と復旧、実行漏れ検知、初回診断、20営業日試験は[継続稼働準備 v0.1](operation-readiness-v0.1.md)に従う。

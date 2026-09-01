@@ -10,7 +10,7 @@ from scripts.nightly_artifacts import next_trading_date, validate_nightly_artifa
 from scripts.nightly_operation import finalize_nightly_run, start_nightly_run
 from scripts.operation_state import PROJECT_ROOT, initialize_or_migrate_workspace
 from scripts.order_ticket import propose_order
-from tests.operation_test_support import record_verified_backup, write_price_archive
+from tests.operation_test_support import write_price_archive
 
 
 FIXTURES = PROJECT_ROOT / "tests/fixtures/official-source-scan"
@@ -50,7 +50,6 @@ class NightlyOperationTest(unittest.TestCase):
                     if str(row.get(field, "")).strip().upper() in statuses:
                         targets.append(str(row.get("code", "")).strip())
         write_price_archive(self.root, sorted(set(targets)) or ["9999"])
-        record_verified_backup(self.root)
         return start_nightly_run(
             at="2026-08-31T18:45:00+09:00",
             cutoff="2026-08-31T18:30:00+09:00",
@@ -401,32 +400,6 @@ class NightlyOperationTest(unittest.TestCase):
         )
 
         self.assertFalse(any("unresolved marker: 未確定" in error for error in errors))
-
-    def test_completed_backup_task_requires_an_existing_private_archive(self) -> None:
-        self._add_holding()
-        started = self._start()
-        run_dir = self.root / str(started["run_dir"])
-        plan_path = run_dir / "work-plan.json"
-        plan = json.loads(plan_path.read_text(encoding="utf-8"))
-        plan["status"] = "COMPLETED"
-        backup_task = next(
-            task for task in plan["tasks"] if task["task_type"] == "operations_backup"
-        )
-        backup_task["status"] = "COMPLETED"
-        backup_task["evidence_source_ids"] = [
-            "internal:backup:operations/private/backups/missing.zip"
-        ]
-        plan_path.write_text(json.dumps(plan), encoding="utf-8")
-
-        errors = validate_nightly_artifacts(
-            root=self.root,
-            run_id="2026-08-31",
-            handoff=json.loads((run_dir / "handoff.json").read_text(encoding="utf-8")),
-            coverage=json.loads((run_dir / "coverage.json").read_text(encoding="utf-8")),
-            orders=[],
-        )
-
-        self.assertTrue(any("archive does not exist" in error for error in errors))
 
     def test_empty_universe_starts_initial_review_with_global_no_action(self) -> None:
         started = self._start()

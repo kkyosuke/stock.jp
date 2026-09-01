@@ -4,7 +4,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DOCUMENT = ROOT / "docs/nightly-operation-v0.1.md"
+DOCUMENT = ROOT / "docs/operations/nightly-operation-v0.1.md"
 
 
 class NightlyOperationDocumentTest(unittest.TestCase):

@@ -14,7 +14,6 @@ from scripts.official_source_scan import (
     _request_json,
     scan_sources,
 )
-from scripts.operation_backup import create_backup
 from scripts.operation_state import PROJECT_ROOT, initialize_or_migrate_workspace
 from tests.operation_test_support import write_price_archive
 
@@ -296,18 +295,9 @@ class OfficialSourceScanTest(unittest.TestCase):
                 "trading_calendar_confirmed": True,
             }
         )
-        backup = create_backup(
-            at="2026-08-31T18:55:00+09:00",
-            allow_plaintext=True,
-            root=self.root,
-        )
         for task in plan["tasks"]:
             task["status"] = "COMPLETED"
-            task["evidence_source_ids"] = (
-                [f"internal:backup:{backup['archive']}"]
-                if task.get("task_type") == "operations_backup"
-                else ["company-ir-1234"]
-            )
+            task["evidence_source_ids"] = ["company-ir-1234"]
         plan_path.write_text(
             json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )

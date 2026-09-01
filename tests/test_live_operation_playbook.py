@@ -4,7 +4,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PLAYBOOK = ROOT / "docs/live-operation-playbook-v0.1.md"
+PLAYBOOK = ROOT / "docs/operations/live-operation-playbook-v0.1.md"
 
 
 class LiveOperationPlaybookTest(unittest.TestCase):

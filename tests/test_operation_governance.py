@@ -4,7 +4,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-GOVERNANCE = ROOT / "docs/operation-governance-v0.1.md"
+GOVERNANCE = ROOT / "docs/operations/operation-governance-v0.1.md"
 
 
 class OperationGovernanceTest(unittest.TestCase):

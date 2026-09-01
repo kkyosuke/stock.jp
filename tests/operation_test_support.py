@@ -70,20 +70,3 @@ def write_price_archive(
         encoding="utf-8",
     )
     return session
-
-
-def record_verified_backup(
-    root: Path, *, at: str = "2026-07-31T18:00:00+09:00"
-) -> Path:
-    private = root / "operations/private"
-    archive = private / "backups/operation-test.zip"
-    archive.parent.mkdir(parents=True, exist_ok=True)
-    archive.write_bytes(b"checksum-verified test backup")
-    state_path = private / "state.json"
-    state = json.loads(state_path.read_text(encoding="utf-8"))
-    state["last_backup_at_jst"] = at
-    state["last_backup_path"] = archive.relative_to(root).as_posix()
-    state["last_backup_sha256"] = hashlib.sha256(archive.read_bytes()).hexdigest()
-    state["last_backup_verified_before_encryption"] = True
-    state_path.write_text(json.dumps(state), encoding="utf-8")
-    return archive

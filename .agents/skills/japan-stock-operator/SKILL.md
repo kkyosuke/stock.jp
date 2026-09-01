@@ -11,15 +11,15 @@ Apply the repository's frozen rules to current public information. Produce a rev
 
 From the repository root, read these files before judging a stock:
 
-1. `docs/live-operation-playbook-v0.1.md`
-2. `docs/operation-governance-v0.1.md`
-3. `docs/tenbagger-rule-v0.2.md`
-4. `docs/tenbagger-rule-v0.3.md` for shadow comparison or after explicit promotion
-5. `docs/tenbagger-rule-v0.4.md` for the active full-tenbagger PAPER allocation
+1. `docs/operations/live-operation-playbook-v0.1.md`
+2. `docs/operations/operation-governance-v0.1.md`
+3. `docs/rules/tenbagger-rule-v0.2.md`
+4. `docs/rules/tenbagger-rule-v0.3.md` for shadow comparison or after explicit promotion
+5. `docs/rules/tenbagger-rule-v0.4.md` for the active full-tenbagger PAPER allocation
 
 Read [references/review-checklists.md](references/review-checklists.md) for the checklist matching the requested review mode. Treat the canonical documents as authoritative if this skill conflicts with them.
 
-For a scheduled run, “today's run,” “today's nightly operation,” or a request to execute all due operations, also read [references/daily-run.md](references/daily-run.md), `docs/nightly-operation-v0.1.md`, `docs/operation-readiness-v0.1.md`, and `docs/daily-automation-runbook-v0.1.md`.
+For a scheduled run, “today's run,” “today's nightly operation,” or a request to execute all due operations, also read [references/daily-run.md](references/daily-run.md), `docs/operations/nightly-operation-v0.1.md`, `docs/operations/operation-readiness-v0.1.md`, and `docs/operations/daily-automation-runbook-v0.1.md`.
 
 ## Choose a review mode
 
@@ -85,7 +85,7 @@ Generate a private draft when a concrete company is under review:
   --date YYYY-MM-DD --code CODE --company NAME --mode MODE
 ```
 
-Fill every applicable field. Store exact quantities, wealth, tax, and account details only under ignored `operations/private/`. Never expose account numbers, credentials, personal identifiers, or total personal assets in chat or tracked files.
+Fill every applicable field. Store exact quantities, wealth, tax, and account details only under `operations/private/`, which is ignored by the public repository and tracked by its private parent repository. Never expose account numbers, credentials, personal identifiers, or total personal assets in chat or public tracked files. Never store credentials in either repository.
 
 In `daily-run` mode, use `scripts/nightly_operation.py start` as the only entry point. Complete `work-plan.json`, `research-results.md`, and every target row in `next-day-actions.csv`. Use `scripts/order_ticket.py propose` for every trade action; never edit an unmatched order into existence. Finalize with the same run token, report the next-day actions, then perform no further checks until the next scheduled night. Do not create one decision log per unchanged holding. Create detailed logs only for an actionable decision or a due periodic review, and summarize all other coverage in the daily report. Never mark a proposed order as submitted or filled without user-provided execution evidence.
 

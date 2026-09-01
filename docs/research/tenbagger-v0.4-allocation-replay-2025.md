@@ -60,6 +60,6 @@ v0.4の期末資産差はv0.2比 **¥+454,753**、最大ドローダウン差は
 .venv/bin/python scripts/tenbagger_v04_allocation_replay.py
 ```
 
-候補は[tenbagger-v0.4-allocation-replay-2025-candidates.csv](../data/tenbagger-v0.4-allocation-replay-2025-candidates.csv)、約定は[tenbagger-v0.4-allocation-replay-2025-trades.csv](../data/tenbagger-v0.4-allocation-replay-2025-trades.csv)、日次資産は[tenbagger-v0.4-allocation-replay-2025-daily.csv](../data/tenbagger-v0.4-allocation-replay-2025-daily.csv)、機械可読集計は[tenbagger-v0.4-allocation-replay-2025-summary.json](../data/tenbagger-v0.4-allocation-replay-2025-summary.json)に保存する。
+候補は[tenbagger-v0.4-allocation-replay-2025-candidates.csv](../../data/tenbagger-v0.4-allocation-replay-2025-candidates.csv)、約定は[tenbagger-v0.4-allocation-replay-2025-trades.csv](../../data/tenbagger-v0.4-allocation-replay-2025-trades.csv)、日次資産は[tenbagger-v0.4-allocation-replay-2025-daily.csv](../../data/tenbagger-v0.4-allocation-replay-2025-daily.csv)、機械可読集計は[tenbagger-v0.4-allocation-replay-2025-summary.json](../../data/tenbagger-v0.4-allocation-replay-2025-summary.json)に保存する。
 
 本実験は将来の利益または損失範囲を予測・保証しない。

@@ -6,7 +6,6 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from scripts.daily_operation import prepare_run
-from scripts.operation_backup import create_backup, stage_restore, verify_backup
 from scripts.operation_bootstrap import check_readiness
 from scripts.operation_smoke import simulate_operations
 from scripts.operation_state import PROJECT_ROOT, initialize_or_migrate_workspace
@@ -39,57 +38,9 @@ class OperationResilienceTest(unittest.TestCase):
         with portfolio.open("a", encoding="utf-8", newline="") as destination:
             csv.DictWriter(destination, fieldnames=fields).writerow(row)
 
-    def test_plaintext_backup_is_explicit_verified_and_restored_to_staging(self) -> None:
-        with self.assertRaisesRegex(PermissionError, "explicit --allow-plaintext"):
-            create_backup(at="2026-08-31T20:00:00+09:00", root=self.root)
-        created = create_backup(
-            at="2026-08-31T20:00:00+09:00",
-            allow_plaintext=True,
-            root=self.root,
-        )
-        verified = verify_backup(archive=Path(created["archive"]), root=self.root)
-        restored = stage_restore(
-            archive=Path(created["archive"]),
-            destination=Path("operations/private/restores/drill-20260831"),
-            root=self.root,
-        )
-        restored_state = self.root / restored["destination"] / "state.json"
-        self.assertTrue(verified["valid"])
-        self.assertGreater(verified["file_count"], 10)
-        self.assertTrue(restored_state.is_file())
-        self.assertEqual(restored["status"], "STAGED")
-
-    def test_live_backup_refuses_plaintext(self) -> None:
-        path = self.root / "operations/private/operation-policy.json"
-        policy = json.loads(path.read_text(encoding="utf-8"))
-        policy["operation_mode"] = "LIVE"
-        path.write_text(
-            json.dumps(policy, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-        )
-        with self.assertRaisesRegex(PermissionError, "LIVE backup requires age"):
-            create_backup(
-                at="2026-08-31T20:00:00+09:00",
-                allow_plaintext=True,
-                root=self.root,
-            )
-        readiness = check_readiness(
-            root=self.root,
-            environ={},
-            fixture_dir=FIXTURES,
-            at="2026-09-01T18:30:00+09:00",
-        )
-        self.assertIn(
-            "LIVE requires OPERATION_BACKUP_AGE_RECIPIENT", readiness["blockers"]
-        )
-
     def test_live_readiness_requires_real_private_evidence_files(self) -> None:
         self._add_holding()
         write_price_archive(self.root, ["1234"])
-        create_backup(
-            at="2026-09-01T17:00:00+09:00",
-            allow_plaintext=True,
-            root=self.root,
-        )
         policy_path = self.root / "operations/private/operation-policy.json"
         policy = json.loads(policy_path.read_text(encoding="utf-8"))
         policy["operation_mode"] = "LIVE"
@@ -107,10 +58,7 @@ class OperationResilienceTest(unittest.TestCase):
 
         readiness = check_readiness(
             root=self.root,
-            environ={
-                "EDINET_API_KEY": "fixture-key",
-                "OPERATION_BACKUP_AGE_RECIPIENT": "age1test",
-            },
+            environ={"EDINET_API_KEY": "fixture-key"},
             at="2026-09-01T18:30:00+09:00",
         )
 
@@ -141,12 +89,6 @@ class OperationResilienceTest(unittest.TestCase):
     def test_paper_can_use_manual_primary_source_fallback(self) -> None:
         self._add_holding()
         write_price_archive(self.root, ["1234"])
-        create_backup(
-            at="2026-09-01T17:00:00+09:00",
-            allow_plaintext=True,
-            root=self.root,
-        )
-
         result = check_readiness(
             root=self.root, environ={}, at="2026-09-01T18:30:00+09:00"
         )
@@ -162,12 +104,6 @@ class OperationResilienceTest(unittest.TestCase):
 
     def test_empty_universe_is_a_candidate_review_warning_not_a_blocker(self) -> None:
         write_price_archive(self.root, ["1234"])
-        create_backup(
-            at="2026-09-01T17:00:00+09:00",
-            allow_plaintext=True,
-            root=self.root,
-        )
-
         result = check_readiness(
             root=self.root, environ={}, at="2026-09-01T18:30:00+09:00"
         )
@@ -179,30 +115,15 @@ class OperationResilienceTest(unittest.TestCase):
             any("initial full-market candidate review" in item for item in result["warnings"])
         )
 
-    def test_paper_blocks_missing_target_price_or_backup_archive(self) -> None:
+    def test_paper_blocks_missing_target_price(self) -> None:
         self._add_holding()
         write_price_archive(self.root, ["5678"])
-        created = create_backup(
-            at="2026-09-01T17:00:00+09:00",
-            allow_plaintext=True,
-            root=self.root,
-        )
         missing_target = check_readiness(
             root=self.root, environ={}, at="2026-09-01T18:30:00+09:00"
         )
         self.assertIn(
             "tracked Yahoo archive does not cover every active target",
             missing_target["paper_blockers"],
-        )
-
-        write_price_archive(self.root, ["1234"])
-        (self.root / created["archive"]).unlink()
-        missing_backup = check_readiness(
-            root=self.root, environ={}, at="2026-09-01T18:30:00+09:00"
-        )
-        self.assertIn(
-            "latest verified operation backup archive is missing",
-            missing_backup["paper_blockers"],
         )
 
     def test_bootstrap_rejects_naive_reference_time(self) -> None:

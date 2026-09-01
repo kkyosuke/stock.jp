@@ -2,7 +2,7 @@
 
 - 発効日: 2026年8月31日
 - 目的: 夜間エージェントが読むべき一次資料を漏れなくキュー化し、取得不能を売買停止条件へ変換する
-- 保存先: Git管理外の`operations/private/runs/YYYY-MM-DD/`
+- 保存先: public Gitでは無視し、親のprivate Gitで追跡する`operations/private/runs/YYYY-MM-DD/`
 
 ## 1. 取得範囲
 

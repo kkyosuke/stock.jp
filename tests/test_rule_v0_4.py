@@ -4,7 +4,7 @@ import unittest
 
 
 ROOT = Path(__file__).parents[1]
-RULE = ROOT / "docs" / "tenbagger-rule-v0.4.md"
+RULE = ROOT / "docs" / "rules" / "tenbagger-rule-v0.4.md"
 
 
 class RuleV04Test(unittest.TestCase):

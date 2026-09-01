@@ -37,7 +37,7 @@ JPXの月次Excelは差し替えられるため、厳密な再現には取得日
 
 上記の現存テンバガー83銘柄へ、v0.2のうち価格系列だけで確定できる売却条件を適用した銘柄別損益である。各銘柄の初期投資を1単位、`Q0 = 1` として正規化し、売却代金と残存株の最終日評価額を分けて記録する。
 
-このCSVは、事後に判明した成功銘柄に対する売却ルールの診断であり、v0.2の銘柄選択またはポートフォリオのバックテストではない。購入時の100点スコア、非成功銘柄、上場廃止、財務・開示依存の売却条件、費用と税を含まない。前提、合計損益、適用条件は[参考損益レポート](../docs/tenbagger-v0.2-price-only-pnl-2016-2026.md)を参照する。
+このCSVは、事後に判明した成功銘柄に対する売却ルールの診断であり、v0.2の銘柄選択またはポートフォリオのバックテストではない。購入時の100点スコア、非成功銘柄、上場廃止、財務・開示依存の売却条件、費用と税を含まない。前提、合計損益、適用条件は[参考損益レポート](../docs/research/tenbagger-v0.2-price-only-pnl-2016-2026.md)を参照する。
 
 ~~~bash
 .venv/bin/python scripts/tenbagger_v02_price_exit_sim.py
@@ -52,7 +52,7 @@ JPXの月次Excelは差し替えられるため、厳密な再現には取得日
 - `daily.csv`: v0.2/v0.4の日次資産、現金、最大DD計算用系列
 - `summary.json`: 機械可読の前提と集計
 
-point-in-time財務・開示・希薄化・SAM/SOM・MRSがないため、完全なテンバガールールのバックテストでも、最低12か月の前向きPAPERの代替でもない。詳細は[実験レポート](../docs/tenbagger-v0.4-allocation-replay-2025.md)を参照する。
+point-in-time財務・開示・希薄化・SAM/SOM・MRSがないため、完全なテンバガールールのバックテストでも、最低12か月の前向きPAPERの代替でもない。詳細は[実験レポート](../docs/research/tenbagger-v0.4-allocation-replay-2025.md)を参照する。
 
 ~~~bash
 .venv/bin/python scripts/tenbagger_v04_allocation_replay.py

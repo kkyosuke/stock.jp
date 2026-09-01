@@ -1,5 +1,5 @@
 {
-  "schema_version": "2.0",
+  "schema_version": "2.1",
   "state_revision": 0,
   "timezone": "Asia/Tokyo",
   "schedule": "weekdays 18:30",
@@ -18,9 +18,5 @@
     "monthly_operations": null,
     "quarterly_performance": null,
     "annual_promotion": null
-  },
-  "last_backup_at_jst": null,
-  "last_backup_path": null,
-  "last_backup_sha256": null,
-  "last_backup_verified_before_encryption": false
+  }
 }
