@@ -7,11 +7,13 @@ from datetime import date
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from scripts.live_gate_evidence import (
     evaluate_historical_replay,
     evaluate_paper_duration,
     evaluate_point_in_time,
+    evaluate_shadow_run,
     write_private_evidence,
 )
 
@@ -286,6 +288,104 @@ class PaperDurationEvidenceTest(unittest.TestCase):
             result = evaluate_paper_duration(root=root)
         self.assertFalse(result["eligible"])
         self.assertIn("pre-promotion LIVE run exists in run history", result["blockers"])
+
+
+class ShadowRunEvidenceTest(unittest.TestCase):
+    def _write_shadow(self, root: Path, *, count: int = 20) -> Path:
+        private = root / "operations/private"
+        private.mkdir(parents=True)
+        rows = []
+        day = date(2026, 8, 1)
+        trading_dates = []
+        while len(trading_dates) < count:
+            if day.weekday() < 5:
+                trading_dates.append(day)
+            day = date.fromordinal(day.toordinal() + 1)
+        for run_date in trading_dates:
+            run_id = run_date.isoformat()
+            price = root / f"data/daily-prices/{run_date.year}/{run_id}.csv"
+            _write(price, "code,close\n1301,1000\n")
+            run_dir = private / "runs" / run_id
+            _write(run_dir / "report.md", f"# {run_id}\n")
+            _write(run_dir / "orders.csv", "ticket_id,code,side,trade_date\n")
+            rows.append(
+                {
+                    "run_id": run_id,
+                    "attempt": "1",
+                    "started_at_jst": f"{run_id}T18:30:00+09:00",
+                    "completed_at_jst": f"{run_id}T19:00:00+09:00",
+                    "status": "COMPLETED",
+                    "operation_mode": "PAPER",
+                    "active_rule_version": "v0.4",
+                    "source_cutoff_jst": f"{run_id}T18:30:00+09:00",
+                    "price_date": run_id,
+                    "report_path": f"operations/private/runs/{run_id}/report.md",
+                    "order_count": "0",
+                    "alert_count": "0",
+                    "data_gap_count": "0",
+                    "next_run_at_jst": "",
+                    "summary": "test",
+                }
+            )
+        history = private / "run-history.csv"
+        with history.open("w", encoding="utf-8", newline="") as target:
+            writer = csv.DictWriter(
+                target, fieldnames=PaperDurationEvidenceTest.FIELDS
+            )
+            writer.writeheader()
+            writer.writerows(rows)
+        return history
+
+    @patch("scripts.live_gate_evidence.validate_run_artifacts")
+    def test_latest_20_tracked_sessions_are_eligible(self, validate) -> None:
+        validate.return_value = {}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_shadow(root)
+            result = evaluate_shadow_run(root=root)
+        self.assertTrue(result["eligible"], result["blockers"])
+        self.assertEqual(result["metrics"]["consecutive_session_count"], 20)
+        self.assertEqual(validate.call_count, 20)
+
+    @patch("scripts.live_gate_evidence.validate_run_artifacts")
+    def test_nineteen_sessions_fail_closed(self, validate) -> None:
+        validate.return_value = {}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_shadow(root, count=19)
+            result = evaluate_shadow_run(root=root)
+        self.assertFalse(result["eligible"])
+        self.assertIn(
+            "fewer than 20 completed v0.4 PAPER trading sessions", result["blockers"]
+        )
+
+    @patch("scripts.live_gate_evidence.validate_run_artifacts")
+    def test_duplicate_ticket_across_runs_is_rejected(self, validate) -> None:
+        validate.return_value = {}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            history = self._write_shadow(root)
+            with history.open(encoding="utf-8", newline="") as source:
+                rows = list(csv.DictReader(source))
+            for row in rows[:2]:
+                row["order_count"] = "1"
+                order = root / f"operations/private/runs/{row['run_id']}/orders.csv"
+                _write(
+                    order,
+                    "ticket_id,code,side,trade_date\n"
+                    f"DUPLICATE,1301,BUY,{row['price_date']}\n",
+                )
+            with history.open("w", encoding="utf-8", newline="") as target:
+                writer = csv.DictWriter(
+                    target, fieldnames=PaperDurationEvidenceTest.FIELDS
+                )
+                writer.writeheader()
+                writer.writerows(rows)
+            result = evaluate_shadow_run(root=root)
+        self.assertFalse(result["eligible"])
+        self.assertIn(
+            "duplicate ticket_id across shadow runs: DUPLICATE", result["blockers"]
+        )
 
 
 if __name__ == "__main__":

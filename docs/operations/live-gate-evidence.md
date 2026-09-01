@@ -51,3 +51,17 @@ stock.jp/.venv/bin/python stock.jp/scripts/live_gate_evidence.py \
 最新 attempt が `COMPLETED / PAPER / v0.4` の run だけを数え、最初と最後の完了日の間が365日以上、12以上の暦月に成功記録があり、期間中に成功が1件もない暦月がないことを要求する。対応する private report がない run は数えない。昇格前に `LIVE` run が記録されていた場合も失敗する。
 
 一時 simulation の20日や履歴再生の日数を PAPER 期間へ算入しない。実時間が365日経過する前に、この gate をコードや手動編集で短縮しない。
+
+## 実データ20営業日の shadow run
+
+`twenty_day_shadow_run` は公開株価 archive の最新20営業日と、private の実 run を1対1で照合する。
+
+~~~bash
+stock.jp/.venv/bin/python stock.jp/scripts/live_gate_evidence.py \
+  --root stock.jp shadow-run \
+  --write-evidence stock.jp/operations/private/evidence/shadow-20-days.json
+~~~
+
+各 run は `COMPLETED / PAPER / v0.4`、run ID と株価基準日が同一、alert と data gap が0件でなければならない。さらに通常の run integrity を再検証し、注文件数と `orders.csv` を照合し、20日間をまたぐ ticket ID および銘柄・side・trade date の重複を拒否する。証跡は run ディレクトリ全体と各価格 session の SHA-256 に拘束される。
+
+`operation_smoke.py --days 20` は状態遷移の回帰テストであり、この実データ gate には算入しない。失敗日や取得漏れがあれば、修正後に新しい20営業日を連続して完了する。

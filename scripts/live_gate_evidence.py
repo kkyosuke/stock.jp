@@ -15,6 +15,11 @@ import tempfile
 from typing import Any
 from zoneinfo import ZoneInfo
 
+try:
+    from scripts.run_integrity import RunIntegrityError, validate_run_artifacts
+except ModuleNotFoundError:  # Direct execution from scripts/
+    from run_integrity import RunIntegrityError, validate_run_artifacts
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 JST = ZoneInfo("Asia/Tokyo")
@@ -22,6 +27,7 @@ SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 POINT_IN_TIME_GATE = "point_in_time_full_universe_validation"
 HISTORICAL_REPLAY_GATE = "historical_replay_2025_2026_accepted"
 PAPER_DURATION_GATE = "minimum_12_month_paper_trade"
+SHADOW_RUN_GATE = "twenty_day_shadow_run"
 
 
 def _read_object(path: Path) -> dict[str, Any]:
@@ -36,6 +42,18 @@ def _sha256(path: Path) -> str:
     with path.open("rb") as source:
         for block in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(block)
+    return digest.hexdigest()
+
+
+def _directory_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    for child in sorted(item for item in path.rglob("*") if item.is_file()):
+        relative = child.relative_to(path).as_posix().encode()
+        digest.update(len(relative).to_bytes(8, "big"))
+        digest.update(relative)
+        content = child.read_bytes()
+        digest.update(len(content).to_bytes(8, "big"))
+        digest.update(content)
     return digest.hexdigest()
 
 
@@ -583,6 +601,208 @@ def evaluate_paper_duration(
     )
 
 
+def evaluate_shadow_run(
+    *, root: Path = PROJECT_ROOT, history_path: Path | None = None
+) -> dict[str, Any]:
+    """Validate the latest 20 tracked trading sessions as real v0.4 PAPER runs."""
+    root = root.resolve()
+    private_root = (root / "operations/private").resolve()
+    history_path = history_path or (private_root / "run-history.csv")
+    blockers: list[str] = []
+    inputs: list[dict[str, str]] = []
+    if not history_path.is_file():
+        return _result(
+            gate=SHADOW_RUN_GATE,
+            blockers=[f"run history is missing: {history_path}"],
+            metrics={},
+            inputs=[],
+        )
+    try:
+        history_path.resolve().relative_to(private_root)
+    except ValueError:
+        blockers.append("run history path must stay under operations/private")
+    try:
+        with history_path.open(encoding="utf-8", newline="") as source:
+            rows = list(csv.DictReader(source))
+    except (OSError, csv.Error) as error:
+        return _result(
+            gate=SHADOW_RUN_GATE,
+            blockers=[*blockers, f"run history is invalid: {error}"],
+            metrics={},
+            inputs=[],
+        )
+
+    latest_by_run: dict[str, tuple[int, dict[str, str]]] = {}
+    for index, row in enumerate(rows, start=2):
+        run_id = row.get("run_id", "").strip()
+        try:
+            attempt = int(row.get("attempt", ""))
+        except ValueError:
+            blockers.append(f"run history row {index} has an invalid attempt")
+            continue
+        if not run_id:
+            blockers.append(f"run history row {index} has no run_id")
+            continue
+        previous = latest_by_run.get(run_id)
+        if previous is None or attempt > previous[0]:
+            latest_by_run[run_id] = (attempt, row)
+
+    candidates: list[tuple[date, dict[str, str]]] = []
+    for _, row in latest_by_run.values():
+        if not (
+            row.get("status", "").strip() == "COMPLETED"
+            and row.get("operation_mode", "").strip() == "PAPER"
+            and row.get("active_rule_version", "").strip() == "v0.4"
+        ):
+            continue
+        try:
+            price_date = date.fromisoformat(row.get("price_date", ""))
+            _parse_aware_datetime(row.get("completed_at_jst", ""))
+            _parse_aware_datetime(row.get("source_cutoff_jst", ""))
+        except ValueError:
+            blockers.append(
+                f"completed shadow run has invalid timestamps: {row.get('run_id', '')}"
+            )
+            continue
+        candidates.append((price_date, row))
+    candidates.sort(key=lambda item: (item[0], item[1].get("run_id", "")))
+    selected = candidates[-20:]
+    selected_dates = [item[0] for item in selected]
+    if len(selected) < 20:
+        blockers.append("fewer than 20 completed v0.4 PAPER trading sessions")
+    if len(set(selected_dates)) != len(selected_dates):
+        blockers.append("shadow runs contain duplicate price dates")
+
+    archive_dates: list[date] = []
+    archive_by_date: dict[date, Path] = {}
+    for price_file in (root / "data/daily-prices").glob("????/????-??-??.csv"):
+        try:
+            archive_date = date.fromisoformat(price_file.stem)
+        except ValueError:
+            continue
+        archive_dates.append(archive_date)
+        archive_by_date[archive_date] = price_file
+    if selected_dates:
+        expected_dates = sorted(
+            item for item in archive_dates if item <= selected_dates[-1]
+        )[-20:]
+        if len(expected_dates) < 20:
+            blockers.append("public price archive has fewer than 20 trading sessions")
+        elif selected_dates != expected_dates:
+            blockers.append(
+                "latest shadow runs do not cover 20 consecutive tracked trading sessions"
+            )
+    else:
+        expected_dates = []
+
+    ticket_ids: set[str] = set()
+    order_keys: set[tuple[str, str, str]] = set()
+    order_count = 0
+    for price_date, row in selected:
+        run_id = row.get("run_id", "").strip()
+        if run_id != price_date.isoformat():
+            blockers.append(f"shadow run_id must equal price_date: {run_id}")
+        try:
+            alert_count = int(row.get("alert_count", ""))
+            data_gap_count = int(row.get("data_gap_count", ""))
+            recorded_order_count = int(row.get("order_count", ""))
+        except ValueError:
+            blockers.append(f"shadow run counts are invalid: {run_id}")
+            continue
+        if alert_count != 0:
+            blockers.append(f"shadow run has alerts: {run_id}")
+        if data_gap_count != 0:
+            blockers.append(f"shadow run has data gaps: {run_id}")
+        try:
+            validate_run_artifacts(
+                root=root,
+                run_id=run_id,
+                completed_at=row.get("completed_at_jst", ""),
+                source_cutoff=row.get("source_cutoff_jst", ""),
+                price_date=price_date.isoformat(),
+            )
+        except (RunIntegrityError, OSError, ValueError, json.JSONDecodeError) as error:
+            blockers.append(f"shadow run integrity failed for {run_id}: {error}")
+            continue
+        run_dir = private_root / "runs" / run_id
+        orders_path = run_dir / "orders.csv"
+        try:
+            with orders_path.open(encoding="utf-8", newline="") as source:
+                orders = list(csv.DictReader(source))
+        except (OSError, csv.Error) as error:
+            blockers.append(f"shadow orders are invalid for {run_id}: {error}")
+            continue
+        if len(orders) != recorded_order_count:
+            blockers.append(f"shadow order_count mismatch: {run_id}")
+        order_count += len(orders)
+        for order in orders:
+            ticket_id = order.get("ticket_id", "").strip()
+            key = (
+                order.get("code", "").strip(),
+                order.get("side", "").strip(),
+                order.get("trade_date", "").strip(),
+            )
+            if ticket_id in ticket_ids:
+                blockers.append(f"duplicate ticket_id across shadow runs: {ticket_id}")
+            if key in order_keys:
+                blockers.append("duplicate code/side/trade_date across shadow runs")
+            ticket_ids.add(ticket_id)
+            order_keys.add(key)
+        inputs.append(
+            {
+                "role": "run_artifacts",
+                "path": f"operations/private/runs/{run_id}",
+                "sha256": _directory_sha256(run_dir),
+            }
+        )
+        price_file = archive_by_date.get(price_date)
+        if price_file:
+            inputs.append(
+                {
+                    "role": "price_session",
+                    "path": os.path.relpath(price_file, root),
+                    "sha256": _sha256(price_file),
+                }
+            )
+
+    inputs.insert(
+        0,
+        {
+            "role": "run_history",
+            "path": "operations/private/run-history.csv",
+            "sha256": _sha256(history_path),
+        },
+    )
+    return _result(
+        gate=SHADOW_RUN_GATE,
+        blockers=blockers,
+        metrics={
+            "consecutive_session_count": len(selected),
+            "first_price_date": selected_dates[0].isoformat()
+            if selected_dates
+            else None,
+            "last_price_date": selected_dates[-1].isoformat()
+            if selected_dates
+            else None,
+            "alert_count": sum(
+                int(row.get("alert_count", "0"))
+                for _, row in selected
+                if row.get("alert_count", "").isdigit()
+            ),
+            "data_gap_count": sum(
+                int(row.get("data_gap_count", "0"))
+                for _, row in selected
+                if row.get("data_gap_count", "").isdigit()
+            ),
+            "order_count": order_count,
+            "duplicate_ticket_count": len(
+                [item for item in blockers if item.startswith("duplicate ticket_id")]
+            ),
+        },
+        inputs=inputs,
+    )
+
+
 def write_private_evidence(*, root: Path, path: Path, result: dict[str, Any]) -> None:
     """Write only successful evidence, and only below operations/private/evidence."""
     if result.get("eligible") is not True:
@@ -624,6 +844,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     paper_duration.add_argument("--history", type=Path)
     paper_duration.add_argument("--write-evidence", type=Path)
+    shadow = subparsers.add_parser(
+        "shadow-run", help="validate 20 consecutive real-data PAPER sessions"
+    )
+    shadow.add_argument("--history", type=Path)
+    shadow.add_argument("--write-evidence", type=Path)
     return parser
 
 
@@ -642,6 +867,11 @@ def main(argv: list[str] | None = None) -> int:
         )
     elif args.command == "paper-duration":
         result = evaluate_paper_duration(
+            root=args.root,
+            history_path=args.history,
+        )
+    elif args.command == "shadow-run":
+        result = evaluate_shadow_run(
             root=args.root,
             history_path=args.history,
         )
