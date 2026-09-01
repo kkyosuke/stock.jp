@@ -23,9 +23,8 @@ chart endpointを銘柄ごとに呼び出す。Python標準ライブラリと既
 3. repository設定でauto-mergeを有効にする。workflowはデータ検証、全test、compile、
    20日smokeが成功した場合だけ、作成したPRのsquash auto-mergeを有効にする。
 
-通常実行に株価APIキーは不要である。リポジトリ設定で標準`GITHUB_TOKEN`からのPR作成を
-許可できない場合だけ、Contents/Pull requestsの書込権限を持つfine-grained PATまたは
-GitHub App tokenをActions secret `PR_TOKEN`へ登録する。
+通常実行に株価APIキーや長期PATは不要である。workflowごとにContentsとPull requestsの
+書込権限へ限定した短命な標準`GITHUB_TOKEN`を使用する。
 
 ## 日次動作
 
@@ -42,9 +41,9 @@ operation smokeを同じjobで実行する。いずれかが失敗した場合�
 すべて成功し、差分がある場合だけPRを作成し、`--auto --squash`でmergeする。差分がない日は
 何もしない。
 
-標準`GITHUB_TOKEN`で作成したPRは再帰的なworkflow起動を抑止されることがあるため、
-merge前検証を収集workflow内に置く。`PR_TOKEN`を設定して通常のPR checkが起動する場合は、
-auto-mergeがその必須checkも待つ。
+標準`GITHUB_TOKEN`で作成したPRは再帰的なworkflow起動を抑止されるため、merge前検証を
+収集workflow内に置く。branch protectionで別の必須checkが設定された場合は、auto-mergeが
+そのcheckも待つ。
 
 ## 境界
 
