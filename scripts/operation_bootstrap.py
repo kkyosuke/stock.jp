@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
-import shutil
 from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
@@ -57,35 +55,6 @@ def _source_config(root: Path, private: Path) -> dict[str, Any]:
             **configured.get(section, {}),
         }
     return merged
-
-
-def _backup_failures(
-    *, root: Path, private: Path, state: dict[str, Any], now: datetime
-) -> list[str]:
-    backup_at = state.get("last_backup_at_jst")
-    relative = state.get("last_backup_path")
-    expected_sha = str(state.get("last_backup_sha256") or "")
-    if not backup_at or not relative or not expected_sha:
-        return ["no verified operation backup has been recorded"]
-    backup = (root / str(relative)).resolve()
-    backup_root = (private / "backups").resolve()
-    if not backup.is_relative_to(backup_root):
-        return ["latest operation backup path is outside the private backup root"]
-    if not backup.is_file():
-        return ["latest verified operation backup archive is missing"]
-    if hashlib.sha256(backup.read_bytes()).hexdigest() != expected_sha:
-        return ["latest operation backup checksum does not match"]
-    try:
-        created = _parse_jst(str(backup_at))
-    except ValueError:
-        return ["latest operation backup timestamp is invalid"]
-    if created > now:
-        return ["latest operation backup timestamp is in the future"]
-    if (now.date() - created.date()).days > 31:
-        return ["latest verified operation backup is older than 31 days"]
-    if state.get("last_backup_verified_before_encryption") is not True:
-        return ["latest operation backup lacks creation-time verification evidence"]
-    return []
 
 
 def _private_evidence_failure(
@@ -184,12 +153,6 @@ def check_readiness(
     )
     base_blockers.extend(price_failures)
 
-    state = _read_json(private / "state.json")
-    backup_failures = _backup_failures(
-        root=root, private=private, state=state, now=now
-    )
-    base_blockers.extend(backup_failures)
-
     mode = str(policy.get("operation_mode", ""))
     paper_blockers = list(base_blockers)
     if mode != "PAPER":
@@ -207,18 +170,7 @@ def check_readiness(
         live_blockers.append(
             "LIVE gates incomplete: " + ", ".join(policy_result["live_gate_failures"])
         )
-    if not shutil.which("age"):
-        live_blockers.append("LIVE requires the age executable for encrypted backups")
-    if not environment.get("OPERATION_BACKUP_AGE_RECIPIENT"):
-        live_blockers.append("LIVE requires OPERATION_BACKUP_AGE_RECIPIENT")
-
     warnings: list[str] = []
-    if backup_failures:
-        warnings.append("no current verified backup is available")
-    if not environment.get("OPERATION_BACKUP_AGE_RECIPIENT"):
-        warnings.append(
-            "OPERATION_BACKUP_AGE_RECIPIENT is unset; encrypted backup is unavailable"
-        )
     if not targets:
         warnings.append(
             "active universe is empty; PAPER is limited to GLOBAL NO-ACTION and "

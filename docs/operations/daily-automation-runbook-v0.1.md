@@ -25,7 +25,7 @@ GitHub Actionsが平日18:30にJPXの現行内国株式全体をYahoo Financeか
 
 ### 2.2 引き継ぎをファイルで固定する
 
-チャット履歴だけを状態管理に使わない。Git管理外の `operations/private/` を正本とし、次回実行は必ず `state.json` と前回の `handoff.json` から再開する。
+チャット履歴だけを状態管理に使わない。public Git では無視し、親の private Git で追跡する `operations/private/` を正本とする。次回実行は必ず `state.json` と前回の `handoff.json` から再開する。
 
 | ファイル | 役割 | 更新者 |
 |---|---|---|
@@ -74,7 +74,7 @@ GitHub Actionsが平日18:30にJPXの現行内国株式全体をYahoo Financeか
 
 最初に`.github/workflows/daily-stock-prices.yml`の最新データPRがマージ済みで、`data/daily-prices/latest.json`がその最新CSVを指していることを確認する。利用者が全銘柄を手入力する必要はない。月次レビューでは蓄積済みの全市場日足から候補を絞り、AIが一次資料と長期条件を確認した銘柄だけ`watchlist.csv`へ登録する。現在の保有がある場合だけ`portfolio-register.csv`へ正確に登録する。
 
-`operation_bootstrap.py check`は、最新CSVのchecksum、全市場98%以上、存在するactive対象の100%、7日以内の鮮度、31日以内の検証済みバックアップを確認する。active対象0件はblockerにせず、その日は`GLOBAL / NO-ACTION`と初回全市場候補レビューだけを行う。`paper_blockers`が1件でもあれば夜間runを開始しない。
+`operation_bootstrap.py check`は、最新CSVのchecksum、全市場98%以上、存在するactive対象の100%、7日以内の鮮度を確認する。active対象0件はblockerにせず、その日は`GLOBAL / NO-ACTION`と初回全市場候補レビューだけを行う。`paper_blockers`が1件でもあれば夜間runを開始しない。
 
 その後、下記の定時タスク用プロンプトをチャットで1回手動実行し、対象件数、根拠URL、注文候補、引き継ぎが期待どおりか確認する。最初の数回は必ず結果をレビューする。
 
@@ -104,11 +104,11 @@ AIは利用者の一回指示で起動する。リマインダー用途でSchedu
 $japan-stock-operator を使って、今日の夜間運用を最後まで実行してください。
 ~~~
 
-スキルはマージ済みYahoo全市場archiveの`COMPLETED`相当の証跡とchecksum、active対象100%、バックアップを確認してから`nightly_operation.py start`へ進み、全調査・世界情勢・全対象アクション・必要な注文票を保存して`finalize`する。成功後は次の夜まで待機する。証券会社への注文送信は行わない。
+スキルはマージ済みYahoo全市場archiveの`COMPLETED`相当の証跡とchecksum、active対象100%、状態・台帳の整合性を確認してから`nightly_operation.py start`へ進み、全調査・世界情勢・全対象アクション・必要な注文票を保存して`finalize`する。成功後は次の夜まで待機する。証券会社への注文送信は行わない。
 
 ## 5. 1回の実行フロー
 
-1. マージ済みYahoo全市場日足の母集団coverage・active対象100%・鮮度・checksumとバックアップを`operation_bootstrap.py check`で検証し、blockerがあれば開始しない
+1. マージ済みYahoo全市場日足の母集団coverage・active対象100%・鮮度・checksumを`operation_bootstrap.py check`で検証し、blockerがあれば開始しない
 2. `operation-policy.json`、`state.json`、保有、取引・資金台帳、再購入禁止、監視、未処理注文、前回引き継ぎを読み、`operation_state.py validate`を通す
 3. 今回のJST情報カットオフを宣言する
 4. `nightly_operation.py start`を実行し、返された`run_token`を保持する。開始処理もreadinessを再検証し、同日の実行が`locked`なら別実行を開始しない。公式情報源はTDnet、EDINET、決算サマリーを差分取得し、APIキーがないPAPERでは会社IR、TDnet/JPX、EDINETをWebで確認して根拠を保存する
@@ -186,4 +186,4 @@ $japan-stock-operator を使って、今日の夜間運用を最後まで実行�
 
 運用ルール自体の閾値は日次運用の都合で変更しない。手順の不具合と投資仮説の成績を分けてレビューする。
 
-月次バックアップ、四半期の復元訓練、実行漏れ検知、CIについては[継続稼働準備 v0.1](operation-readiness-v0.1.md)に従う。
+private remote との同期、四半期の clean-clone 復旧訓練、実行漏れ検知、CIについては[継続稼働準備 v0.1](operation-readiness-v0.1.md)に従う。

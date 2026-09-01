@@ -11,6 +11,7 @@ from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_POLICY = PROJECT_ROOT / "operations/private/operation-policy.json"
+POLICY_SCHEMA_VERSION = "1.2"
 VALID_MODES = {"PAPER", "LIVE", "PAUSED"}
 VALID_SUBMISSION = {"HUMAN_ONLY"}
 REQUIRED_LIVE_GATES = {
@@ -19,7 +20,7 @@ REQUIRED_LIVE_GATES = {
     "minimum_12_month_paper_trade",
     "twenty_day_shadow_run",
     "official_source_coverage",
-    "backup_restore_drill",
+    "private_repository_recovery",
     "personal_risk_and_broker_check",
 }
 VALID_RULE_VERSIONS = {"v0.2", "v0.3", "v0.4"}
@@ -41,8 +42,8 @@ def load_policy(path: Path = DEFAULT_POLICY) -> dict[str, Any]:
 
 def validate_policy(policy: dict[str, Any]) -> list[str]:
     errors: list[str] = []
-    if policy.get("schema_version") != "1.1":
-        errors.append("schema_version must be 1.1")
+    if policy.get("schema_version") != POLICY_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {POLICY_SCHEMA_VERSION}")
     if policy.get("operation_mode") not in VALID_MODES:
         errors.append("operation_mode must be PAPER, LIVE, or PAUSED")
     if policy.get("broker_submission") not in VALID_SUBMISSION:

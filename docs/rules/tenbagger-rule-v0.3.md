@@ -14,7 +14,7 @@ v0.3はv0.2を置き換えて成績改善を宣言する版ではない。v0.2�
 
 ## 1. なぜ複雑化ではなく簡素化するか
 
-[v0.2価格ルールの参考損益](tenbagger-v0.2-price-only-pnl-2016-2026.md)では、事後に判明した現存テンバガー83銘柄に価格で実行可能な条件を適用した。
+[v0.2価格ルールの参考損益](../research/tenbagger-v0.2-price-only-pnl-2016-2026.md)では、事後に判明した現存テンバガー83銘柄に価格で実行可能な条件を適用した。
 
 - v0.2価格ルールは83銘柄中51銘柄で売却なしを上回り、32銘柄で下回った
 - 合計は762.99単位で、売却なし769.89単位を6.90単位下回った
@@ -194,11 +194,11 @@ S-A / S-Bが成立 ── はい → v0.2どおり撤退・縮小
 | v0.2 | 成功後の下落を受けた運用ルール | 現行ベースライン |
 | v0.3 | v0.2価格診断を受けた運用ルールの簡素化 | 凍結済みチャレンジャー |
 
-v0.3の価格部分は[scripts/tenbagger_v03_price_rules.py](../scripts/tenbagger_v03_price_rules.py)に実装し、合成価格による単体テストだけを行う。同じ83銘柄でv0.3の損益を最大化する探索は行わない。全母集団のpoint-in-timeデータを取得した後、事前に固定したv0.2対v0.3の比較を1回だけ実行する。
+v0.3の価格部分は[scripts/tenbagger_v03_price_rules.py](../../scripts/tenbagger_v03_price_rules.py)に実装し、合成価格による単体テストだけを行う。同じ83銘柄でv0.3の損益を最大化する探索は行わない。全母集団のpoint-in-timeデータを取得した後、事前に固定したv0.2対v0.3の比較を1回だけ実行する。
 
 ## 8. 参照
 
-- [v0.2価格ルール適用時の参考損益](tenbagger-v0.2-price-only-pnl-2016-2026.md)
+- [v0.2価格ルール適用時の参考損益](../research/tenbagger-v0.2-price-only-pnl-2016-2026.md)
 - [日本株テンバガー判定・運用ルール v0.2](tenbagger-rule-v0.2.md)
 - [Bailey et al., The Probability of Backtest Overfitting](https://www.davidhbailey.com/dhbpapers/backtest-prob.pdf)
 - [White, A Reality Check for Data Snooping](https://onlinelibrary.wiley.com/doi/10.1111/1468-0262.00152)

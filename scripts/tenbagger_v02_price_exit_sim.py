@@ -27,7 +27,7 @@ except ModuleNotFoundError:  # Direct execution: python scripts/<file>.py
 DEFAULT_EPISODES = Path("data/tenbagger-survivor-price-episodes-2016-2026.csv")
 DEFAULT_CACHE_DIR = Path(".cache/yahoo-daily")
 DEFAULT_OUTPUT = Path("data/tenbagger-v0.2-price-only-pnl-2016-2026.csv")
-DEFAULT_REPORT = Path("docs/tenbagger-v0.2-price-only-pnl-2016-2026.md")
+DEFAULT_REPORT = Path("docs/research/tenbagger-v0.2-price-only-pnl-2016-2026.md")
 DEFAULT_CALENDAR_CODE = "7203"
 
 

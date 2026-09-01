@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 import json
 import tempfile
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -152,7 +152,6 @@ def build_due_tasks(
     research_queue: dict[str, Any],
     pending_review_ids: list[str] | None = None,
     source_rows: list[dict[str, str]] | None = None,
-    last_backup_at: str | None = None,
     initial_universe_review_due: bool = False,
 ) -> list[dict[str, Any]]:
     current = _parse_jst(at)
@@ -174,22 +173,6 @@ def build_due_tasks(
                 "initial_universe_review",
                 "HIGH",
                 "監視対象0件: 蓄積済み全市場日足から長期候補を抽出し、一次資料確認対象を絞る",
-                due_at,
-            )
-        )
-    backup_due = not last_backup_at
-    if last_backup_at:
-        try:
-            backup_due = _parse_jst(last_backup_at) <= current - timedelta(days=31)
-        except ValueError:
-            backup_due = True
-    if backup_due:
-        tasks.append(
-            _task(
-                f"{run_id}-operations-backup",
-                "operations_backup",
-                "HIGH",
-                "暗号化バックアップが未作成または31日超過",
                 due_at,
             )
         )
@@ -304,7 +287,6 @@ def create_nightly_artifacts(
                 str(value) for value in coverage.get("universe", {}).get("due_reviews", {}).get("expected", [])
             ],
             source_rows=source_rows,
-            last_backup_at=state.get("last_backup_at_jst"),
             initial_universe_review_due=(
                 not state.get("last_run_id")
                 and not any(
@@ -335,7 +317,6 @@ def create_nightly_artifacts(
                     str(value) for value in coverage.get("universe", {}).get("due_reviews", {}).get("expected", [])
                 ],
                 source_rows=source_rows,
-                last_backup_at=state.get("last_backup_at_jst"),
                 initial_universe_review_due=(
                     not state.get("last_run_id")
                     and not any(
@@ -458,14 +439,11 @@ def validate_nightly_artifacts(
         text = str(value or "").replace("|", ";").replace(",", ";")
         return [item.strip() for item in text.split(";") if item.strip()]
 
-    def unknown_evidence(
-        values: list[str], *, allow_backup: bool = False
-    ) -> list[str]:
+    def unknown_evidence(values: list[str]) -> list[str]:
         return sorted(
             value
             for value in set(values)
             if value not in valid_evidence_ids
-            and not (allow_backup and value.startswith("internal:backup:"))
         )
 
     plan = _read_json(run_dir / "work-plan.json")
@@ -496,37 +474,11 @@ def validate_nightly_artifacts(
             errors.append(f"completed work-plan task lacks evidence: {task_id or '<blank>'}")
         if status == "COMPLETED":
             task_evidence = evidence_ids(task.get("evidence_source_ids"))
-            is_backup = str(task.get("task_type", "")) == "operations_backup"
-            unknown = unknown_evidence(task_evidence, allow_backup=is_backup)
+            unknown = unknown_evidence(task_evidence)
             if unknown:
                 errors.append(
                     f"work-plan task {task_id or '<blank>'} cites unknown evidence: {', '.join(unknown)}"
                 )
-            if is_backup:
-                backup_ids = [
-                    value
-                    for value in task_evidence
-                    if value.startswith("internal:backup:")
-                ]
-                if len(backup_ids) != 1 or len(task_evidence) != 1:
-                    errors.append(
-                        f"operations backup task {task_id or '<blank>'} requires one backup archive evidence"
-                    )
-                else:
-                    archive_text = backup_ids[0].removeprefix("internal:backup:")
-                    archive = root / archive_text
-                    backup_root = (root / "operations/private/backups").resolve()
-                    try:
-                        archive.resolve().relative_to(backup_root)
-                    except ValueError:
-                        errors.append(
-                            f"operations backup task {task_id or '<blank>'} archive is outside the private backup directory"
-                        )
-                    else:
-                        if not archive.is_file():
-                            errors.append(
-                                f"operations backup task {task_id or '<blank>'} archive does not exist"
-                            )
         if status == "DEFERRED" and task_id not in pending_reviews:
             errors.append(f"deferred work-plan task missing from handoff: {task_id or '<blank>'}")
     duplicate_tasks = sorted(

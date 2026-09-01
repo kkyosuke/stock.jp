@@ -12,7 +12,6 @@ from scripts.daily_operation import (
     initialize_workspace,
     prepare_run,
 )
-from scripts.operation_backup import create_backup
 
 
 def complete_artifacts(
@@ -79,18 +78,9 @@ def complete_artifacts(
             "trading_calendar_confirmed": True,
         }
     )
-    backup = None
-    if any(task.get("task_type") == "operations_backup" for task in plan["tasks"]):
-        backup = create_backup(
-            at="2026-08-31T18:46:00+09:00", allow_plaintext=True, root=root
-        )
     for task in plan["tasks"]:
         task["status"] = "COMPLETED"
-        task["evidence_source_ids"] = (
-            [f"internal:backup:{backup['archive']}"]
-            if task.get("task_type") == "operations_backup" and backup
-            else ["jpx-check-1"]
-        )
+        task["evidence_source_ids"] = ["jpx-check-1"]
     plan_path.write_text(
         json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
@@ -362,7 +352,7 @@ class DailyOperationTest(unittest.TestCase):
             state["last_disclosure_cutoff_jst"], "2026-08-31T18:30:00+09:00"
         )
         self.assertEqual(state["pending_reviews"], ["1234-quarterly"])
-        self.assertEqual(state["schema_version"], "2.0")
+        self.assertEqual(state["schema_version"], "2.1")
         self.assertEqual(state["state_revision"], 1)
         self.assertEqual(state["consecutive_successful_runs"], 1)
         self.assertEqual(

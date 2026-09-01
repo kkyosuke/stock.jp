@@ -4,8 +4,8 @@ Use this workflow when the request is “today's run,” a scheduled operation, 
 
 ## Start or resume once at night
 
-1. Read `docs/nightly-operation-v0.1.md`, `docs/daily-automation-runbook-v0.1.md`, `operations/private/operation-policy.json`, and the canonical rule files named in `SKILL.md`.
-2. Run `scripts/operation_bootstrap.py check` first. It must verify the merged tracked Yahoo archive checksum, at least 98% full-market coverage, 100% active-target coverage, freshness, and a current verified backup. Stop on any PAPER blocker; Yahoo is an unofficial secondary price source.
+1. Read `docs/operations/nightly-operation-v0.1.md`, `docs/operations/daily-automation-runbook-v0.1.md`, `operations/private/operation-policy.json`, and the canonical rule files named in `SKILL.md`.
+2. Run `scripts/operation_bootstrap.py check` first. It must verify the merged tracked Yahoo archive checksum, at least 98% full-market coverage, 100% active-target coverage, and freshness. Stop on any PAPER blocker; Yahoo is an unofficial secondary price source.
 3. Run `scripts/nightly_operation.py start --at <current aware JST timestamp> --cutoff <declared JST cutoff>` and retain the returned `run_token`. Start repeats readiness before creating a run, scans EDINET, and creates due first-party checks. Confirm company IR, TDnet, official prices/corporate actions, and the next JPX cash-equity trading date from their primary pages before closing the run. If it returns `locked`, do not start a second run.
 4. Read `provider-health.json`, `research-queue.json`, `work-plan.json`, `coverage.json`, `operations/private/state.json`, the previous run's `handoff.json` when present, `portfolio-register.csv`, `watchlist.csv`, and the trade, recovered-capital, cash, corporate-action, rebuy-restriction, and industry-exposure ledgers.
 5. If the returned run status is already `completed`, report that the date was already closed. Do not create duplicate orders.
@@ -14,8 +14,6 @@ Use this workflow when the request is “today's run,” a scheduled operation, 
 ## Cover the required universe
 
 Process every task in both `research-queue.json` and `work-plan.json`. Check TDnet, company IR, official prices/corporate actions, JPX notices, and the cash-equity calendar in their primary sites. Mark a task `COMPLETED` only with `evidence_source_ids`; defer it only by copying the same task ID into `handoff.pending_reviews`.
-
-When an `operations_backup` task is due, run `scripts/operation_backup.py create --at <current aware JST timestamp>`. It uses `OPERATION_BACKUP_AGE_RECIPIENT` when configured. Never add `--allow-plaintext` unless the user explicitly authorized a plaintext PAPER backup. Record the resulting private archive path as `internal:backup:<path>` evidence; if encryption is unavailable, defer the task and report the setup action.
 
 Check all current holdings and pending orders. Check active watchlist names for new official disclosures, but do not fully rescore every watchlist name every day. Use the prior successful disclosure cutoff as the lower bound and the declared current cutoff as the upper bound.
 

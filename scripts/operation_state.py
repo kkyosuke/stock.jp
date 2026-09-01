@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 JST = ZoneInfo("Asia/Tokyo")
-STATE_SCHEMA_VERSION = "2.0"
+STATE_SCHEMA_VERSION = "2.1"
 
 TEMPLATE_TO_PRIVATE = {
     "daily-run-state-template.json": "state.json",
@@ -39,6 +39,7 @@ TEMPLATE_TO_PRIVATE = {
 CSV_MIGRATIONS = {
     "portfolio-register.csv": "portfolio-register.csv",
     "run-history.csv": "run-history-template.csv",
+    "schema-migration-log.csv": "schema-migration-log.csv",
 }
 
 LEDGER_IDS = {
@@ -77,7 +78,7 @@ def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
 
 def _normalized_state(state: dict[str, Any]) -> dict[str, Any]:
     version = state.get("schema_version")
-    if version not in {"1.0", STATE_SCHEMA_VERSION}:
+    if version not in {"1.0", "2.0", STATE_SCHEMA_VERSION}:
         raise ValueError(f"unsupported state schema: {version!r}")
     normalized = dict(state)
     normalized["schema_version"] = STATE_SCHEMA_VERSION
@@ -97,10 +98,13 @@ def _normalized_state(state: dict[str, Any]) -> dict[str, Any]:
         "quarterly_performance": reviews.get("quarterly_performance"),
         "annual_promotion": reviews.get("annual_promotion"),
     }
-    normalized.setdefault("last_backup_at_jst", None)
-    normalized.setdefault("last_backup_path", None)
-    normalized.setdefault("last_backup_sha256", None)
-    normalized.setdefault("last_backup_verified_before_encryption", False)
+    for legacy_backup_field in (
+        "last_backup_at_jst",
+        "last_backup_path",
+        "last_backup_sha256",
+        "last_backup_verified_before_encryption",
+    ):
+        normalized.pop(legacy_backup_field, None)
     return normalized
 
 
@@ -161,10 +165,10 @@ def _normalized_source_config(
 def _normalized_policy(
     policy: dict[str, Any], template: dict[str, Any]
 ) -> dict[str, Any]:
-    if policy.get("schema_version") not in {"1.0", "1.1"}:
+    if policy.get("schema_version") not in {"1.0", "1.1", "1.2"}:
         return policy
     normalized = dict(policy)
-    normalized["schema_version"] = "1.1"
+    normalized["schema_version"] = "1.2"
     gates = policy.get("live_gates")
     evidence = policy.get("live_gate_evidence")
     normalized["live_gates"] = {
@@ -175,6 +179,14 @@ def _normalized_policy(
         **template.get("live_gate_evidence", {}),
         **(evidence if isinstance(evidence, dict) else {}),
     }
+    legacy_gate = "backup_restore_drill"
+    replacement_gate = "private_repository_recovery"
+    if isinstance(gates, dict) and legacy_gate in gates:
+        normalized["live_gates"][replacement_gate] = gates[legacy_gate]
+    if isinstance(evidence, dict) and legacy_gate in evidence:
+        normalized["live_gate_evidence"][replacement_gate] = evidence[legacy_gate]
+    normalized["live_gates"].pop(legacy_gate, None)
+    normalized["live_gate_evidence"].pop(legacy_gate, None)
     normalized.setdefault("v04_holdout_promotion", False)
     return normalized
 
@@ -192,6 +204,9 @@ def _migrate_csv(path: Path, template_path: Path) -> None:
     target_fields = _template_header(template_path)
     with path.open(encoding="utf-8", newline="") as source:
         rows = list(csv.DictReader(source))
+    if "migration_snapshot_dir" in target_fields:
+        for row in rows:
+            row.setdefault("migration_snapshot_dir", row.get("backup_dir", ""))
     with tempfile.NamedTemporaryFile(
         "w", encoding="utf-8", newline="", dir=path.parent, delete=False
     ) as temporary:
@@ -246,19 +261,19 @@ def _planned_migrations(root: Path) -> list[tuple[Path, Path | None]]:
     return planned
 
 
-def _backup_migrations(
+def _snapshot_migrations(
     *, root: Path, planned: list[tuple[Path, Path | None]], migrated_at: datetime
 ) -> Path | None:
     if not planned:
         return None
     private = _private_root(root)
-    backup = private / "migrations" / migrated_at.strftime("%Y%m%dT%H%M%S.%f%z")
+    snapshot = private / "migrations" / migrated_at.strftime("%Y%m%dT%H%M%S.%f%z")
     for source, _ in planned:
         relative = source.relative_to(private)
-        destination = backup / relative
+        destination = snapshot / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
-    return backup
+    return snapshot
 
 
 def secure_private_tree(root: Path = PROJECT_ROOT) -> None:
@@ -293,7 +308,9 @@ def initialize_or_migrate_workspace(
 
     planned = _planned_migrations(root)
     migrated_at = datetime.now(JST)
-    backup = _backup_migrations(root=root, planned=planned, migrated_at=migrated_at)
+    migration_snapshot = _snapshot_migrations(
+        root=root, planned=planned, migrated_at=migrated_at
+    )
 
     created: list[str] = []
     existing: list[str] = []
@@ -362,7 +379,7 @@ def initialize_or_migrate_workspace(
                     from_schema,
                     to_schema,
                     "|".join(migrated),
-                    _relative(backup, root) if backup else "",
+                    _relative(migration_snapshot, root) if migration_snapshot else "",
                     "SUCCESS",
                     "automatic non-destructive migration",
                 ]
@@ -373,7 +390,9 @@ def initialize_or_migrate_workspace(
         "created": created,
         "existing": existing,
         "migrated": migrated,
-        "backup_dir": _relative(backup, root) if backup else None,
+        "migration_snapshot_dir": (
+            _relative(migration_snapshot, root) if migration_snapshot else None
+        ),
         "schema_version": STATE_SCHEMA_VERSION,
     }
 

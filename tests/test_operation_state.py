@@ -38,8 +38,8 @@ class OperationStateTest(unittest.TestCase):
         private = self.root / "operations/private"
         state = json.loads((private / "state.json").read_text(encoding="utf-8"))
 
-        self.assertEqual(result["schema_version"], "2.0")
-        self.assertEqual(state["schema_version"], "2.0")
+        self.assertEqual(result["schema_version"], "2.1")
+        self.assertEqual(state["schema_version"], "2.1")
         for filename in (
             "trade-event-ledger.csv",
             "recovered-capital-ledger.csv",
@@ -70,6 +70,10 @@ class OperationStateTest(unittest.TestCase):
             "pending_orders": ["ticket-1"],
             "data_gaps": [],
             "next_run_at_jst": "2026-08-31T18:30:00+09:00",
+            "last_backup_at_jst": "2026-08-28T20:00:00+09:00",
+            "last_backup_path": "operations/private/backups/legacy.zip.age",
+            "last_backup_sha256": "legacy",
+            "last_backup_verified_before_encryption": True,
         }
         (private / "state.json").write_text(
             json.dumps(legacy_state, ensure_ascii=False) + "\n", encoding="utf-8"
@@ -95,14 +99,18 @@ class OperationStateTest(unittest.TestCase):
         ) as source:
             migrations = list(csv.DictReader(source))
 
-        self.assertEqual(state["schema_version"], "2.0")
+        self.assertEqual(state["schema_version"], "2.1")
+        self.assertNotIn("last_backup_at_jst", state)
+        self.assertNotIn("last_backup_path", state)
+        self.assertNotIn("last_backup_sha256", state)
+        self.assertNotIn("last_backup_verified_before_encryption", state)
         self.assertEqual(state["pending_orders"], ["ticket-1"])
         self.assertEqual(state["unreconciled_ticket_ids"], ["ticket-1"])
         self.assertEqual(positions[0]["code"], "1234")
         self.assertEqual(positions[0]["average_cost"], "1000")
         self.assertEqual(positions[0]["five_x_taken"], "")
         self.assertIn("operations/private/state.json", first["migrated"])
-        self.assertIsNotNone(first["backup_dir"])
+        self.assertIsNotNone(first["migration_snapshot_dir"])
         self.assertEqual(second["migrated"], [])
         self.assertEqual(len(migrations), 1)
 
@@ -185,6 +193,29 @@ class OperationStateTest(unittest.TestCase):
         self.assertEqual(entries[-1]["from_schema"], "1.0")
         self.assertEqual(entries[-1]["to_schema"], "1.1")
 
+    def test_migrates_legacy_migration_log_snapshot_column(self) -> None:
+        initialize_or_migrate_workspace(self.root)
+        private = self.root / "operations/private"
+        migration_log = private / "schema-migration-log.csv"
+        migration_log.write_text(
+            "migrated_at_jst,from_schema,to_schema,changed_paths,backup_dir,result,notes\n"
+            "2026-08-31T00:00:00+09:00,1.0,2.0,state.json,"
+            "operations/private/migrations/legacy,SUCCESS,legacy migration\n",
+            encoding="utf-8",
+        )
+
+        result = initialize_or_migrate_workspace(self.root)
+        with migration_log.open(encoding="utf-8", newline="") as source:
+            rows = list(csv.DictReader(source))
+
+        self.assertIn(
+            "operations/private/schema-migration-log.csv", result["migrated"]
+        )
+        self.assertEqual(
+            rows[0]["migration_snapshot_dir"],
+            "operations/private/migrations/legacy",
+        )
+
     def test_migrates_new_live_gate_without_changing_legacy_decisions(self) -> None:
         initialize_or_migrate_workspace(self.root)
         private = self.root / "operations/private"
@@ -225,9 +256,35 @@ class OperationStateTest(unittest.TestCase):
         migrated = json.loads(policy_path.read_text(encoding="utf-8"))
 
         self.assertIn("operations/private/operation-policy.json", result["migrated"])
-        self.assertEqual(migrated["schema_version"], "1.1")
+        self.assertEqual(migrated["schema_version"], "1.2")
         self.assertEqual(migrated["active_rule_version"], "v0.2")
         self.assertFalse(migrated["v04_holdout_promotion"])
+
+    def test_migrates_backup_gate_to_private_repository_recovery(self) -> None:
+        initialize_or_migrate_workspace(self.root)
+        private = self.root / "operations/private"
+        policy_path = private / "operation-policy.json"
+        policy = json.loads(policy_path.read_text(encoding="utf-8"))
+        policy["schema_version"] = "1.1"
+        policy["live_gates"].pop("private_repository_recovery")
+        policy["live_gate_evidence"].pop("private_repository_recovery")
+        policy["live_gates"]["backup_restore_drill"] = True
+        policy["live_gate_evidence"]["backup_restore_drill"] = (
+            "operations/private/evidence/recovery.md"
+        )
+        policy_path.write_text(json.dumps(policy) + "\n", encoding="utf-8")
+
+        initialize_or_migrate_workspace(self.root)
+        migrated = json.loads(policy_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(migrated["schema_version"], "1.2")
+        self.assertTrue(migrated["live_gates"]["private_repository_recovery"])
+        self.assertEqual(
+            migrated["live_gate_evidence"]["private_repository_recovery"],
+            "operations/private/evidence/recovery.md",
+        )
+        self.assertNotIn("backup_restore_drill", migrated["live_gates"])
+        self.assertNotIn("backup_restore_drill", migrated["live_gate_evidence"])
 
 
 if __name__ == "__main__":

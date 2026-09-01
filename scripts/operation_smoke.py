@@ -15,7 +15,6 @@ from zoneinfo import ZoneInfo
 try:
     from scripts.daily_operation import prepare_run
     from scripts.nightly_operation import finalize_nightly_run
-    from scripts.operation_backup import create_backup
     from scripts.operation_state import (
         initialize_or_migrate_workspace,
         validate_workspace,
@@ -23,7 +22,6 @@ try:
 except ModuleNotFoundError:  # Direct execution from scripts/
     from daily_operation import prepare_run
     from nightly_operation import finalize_nightly_run
-    from operation_backup import create_backup
     from operation_state import initialize_or_migrate_workspace, validate_workspace
 
 
@@ -143,13 +141,6 @@ def simulate_operations(
         (sandbox / "operations").mkdir()
         shutil.copytree(root / "operations/templates", sandbox / "operations/templates")
         initialize_or_migrate_workspace(sandbox)
-        create_backup(
-            at=datetime.combine(first, time(17, 0), tzinfo=JST).isoformat(
-                timespec="seconds"
-            ),
-            allow_plaintext=True,
-            root=sandbox,
-        )
         for run_date in run_dates:
             at = datetime.combine(run_date, time(18, 30), tzinfo=JST).isoformat(timespec="seconds")
             prepared = prepare_run(at=at, root=sandbox)

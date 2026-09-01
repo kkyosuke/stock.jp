@@ -59,7 +59,7 @@ Yahoo Financeは公式または契約APIではなく、候補探索とPAPERの�
 - `operations/private/watchlist.csv`: 人が確認対象としたactive銘柄
 - `operations/private/runs/YYYY-MM-DD/sources.csv`: Yahoo二次データと一次資料の利用証跡
 
-認証情報、個人の保有数量・原価・資金、調整補助表は`operations/private/`に置き、Gitへ追加しない。
+認証情報はGitへ追加しない。個人の保有数量・原価・資金、調整補助表は`operations/private/`に置き、public Gitではなく親のprivate Gitで追跡する。
 
 ## 既知の限界
 

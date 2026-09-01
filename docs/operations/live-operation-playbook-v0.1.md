@@ -2,7 +2,7 @@
 
 - 状態: ペーパートレード運用用。実資金への昇格は[運用ガバナンス](operation-governance-v0.1.md)に従う
 - 凍結日: 2026年8月31日
-- 銘柄判定: `PAPER`では[v0.4](tenbagger-rule-v0.4.md)をベースライン、[v0.2](tenbagger-rule-v0.2.md)と[v0.3](tenbagger-rule-v0.3.md)をシャドー比較とする
+- 銘柄判定: `PAPER`では[v0.4](../rules/tenbagger-rule-v0.4.md)をベースライン、[v0.2](../rules/tenbagger-rule-v0.2.md)と[v0.3](../rules/tenbagger-rule-v0.3.md)をシャドー比較とする
 - 対象: 日本株の新規購入、継続、追加、縮小、売却、情勢確認、注文、記録
 
 本書は「良さそうだから今買う」という裁量を減らし、同じ情報なら同じ行動へ到達するための手順書である。v0.4では運用資産の100%をテンバガー戦略の対象にするが、投資比率を埋めるための強制購入はしない。初回5%、追加1回2.5%、1銘柄累計10%、同一業種20%、候補群100%は目標額ではなく絶対上限とする。未投資分は固定的な安全資産ではなく、合格候補または追加条件を待つ戦略待機資金として記録する。生活資金、納税資金、5年以内に使う予定資金、借入金を運用資産へ含めない。
@@ -22,7 +22,7 @@
 7. 100株単位への切り下げ後も購入上限または流動性上限を超える
 8. 判断に使った資料のURL、公開日時、取得日時を保存していない
 
-公開リポジトリには資産総額、口座番号、認証情報、正確な保有数量を保存しない。実ログはGit管理外の `operations/private/` に置き、公開用には比率と匿名化した集計だけを残す。
+公開リポジトリには資産総額、口座番号、認証情報、正確な保有数量を保存しない。実ログは親のprivateリポジトリが追跡する `operations/private/` に置く。公開用には、現在のポジションを推測できない比率と匿名化集計だけを残す。
 
 ## 2. いつ確認するか
 
@@ -160,7 +160,7 @@ v0.4の初回購入上限は `5% × 上限倍率`、1回の追加上限は `2.5%
 
 ## 7. ログの作り方
 
-判断ログは[テンプレート](../operations/templates/decision-log-template.md)から作成するか、次のコマンドでGit管理外へ生成する。
+判断ログは[テンプレート](../../operations/templates/decision-log-template.md)から作成するか、次のコマンドでprivate領域へ生成する。
 
 ~~~bash
 .venv/bin/python scripts/new_operation_log.py \
@@ -182,7 +182,7 @@ v0.4の初回購入上限は `5% × 上限倍率`、1回の追加上限は `2.5%
 - 次回レビュー日
 - 手数料、税、スリッページ、見送った場合の反実仮想
 
-保有一覧は[portfolio-register.csv](../operations/templates/portfolio-register.csv)、情勢指数の履歴は[market-regime-log.csv](../operations/templates/market-regime-log.csv)の列を使う。日次実行は[daily-report-template.md](../operations/templates/daily-report-template.md)、[order-ticket-template.csv](../operations/templates/order-ticket-template.csv)、[pretrade-check-template.md](../operations/templates/pretrade-check-template.md)を使う。実数値を含むファイルは `operations/private/` へコピーし、テンプレート自体を直接編集しない。
+保有一覧は[portfolio-register.csv](../../operations/templates/portfolio-register.csv)、情勢指数の履歴は[market-regime-log.csv](../../operations/templates/market-regime-log.csv)の列を使う。日次実行は[daily-report-template.md](../../operations/templates/daily-report-template.md)、[order-ticket-template.csv](../../operations/templates/order-ticket-template.csv)、[pretrade-check-template.md](../../operations/templates/pretrade-check-template.md)を使う。実数値を含むファイルは `operations/private/` へコピーし、テンプレート自体を直接編集しない。
 
 ## 8. 情報源の優先順位
 

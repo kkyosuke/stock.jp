@@ -7,7 +7,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 PREFIX = ROOT / "data/tenbagger-v0.4-allocation-replay-2025"
-REPORT = ROOT / "docs/tenbagger-v0.4-allocation-replay-2025.md"
+REPORT = ROOT / "docs/research/tenbagger-v0.4-allocation-replay-2025.md"
 
 
 class V04AllocationReplayDatasetTest(unittest.TestCase):

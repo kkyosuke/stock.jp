@@ -1,28 +1,51 @@
 # stock.jp
 
-## Live operations
+日本株戦略の再現可能なコード、公開データ、ルール、運用仕様を管理する公開リポジトリです。GitHub Actions を使う定期収集・検証・回帰テストはここで実行します。個人の保有数量、資金、注文、判断記録は含めません。
 
-- [日本株テンバガー実運用手順書 v0.1](docs/live-operation-playbook-v0.1.md) — 注文、監視、情勢指数、購入・継続・追加・縮小・売却の手順
-- [日本株運用ガバナンス v0.1](docs/operation-governance-v0.1.md) — PAPER/LIVE、適用ルール版、昇格条件、定期的なルール見直し
-- [日本株テンバガー判定・運用ルール v0.4](docs/tenbagger-rule-v0.4.md) — 運用資産100%を対象にする現行PAPER資金配分
-- [2025–2026年ルール履歴再生](docs/historical-replay-2025-2026.md) — 年別・銘柄別損益の受入仕様、データ充足状況、PAPER判定
-- [履歴日足アーカイブ仕様 v0.1](docs/historical-data-import-v0.1.md) — PR #14互換の日付別CSV、検証、ハッシュ、非公開データの扱い
-- [日本株運用状態・台帳仕様 v0.2](docs/operation-state-v0.2.md) — 利確フラグ、決算連続条件、再購入禁止、回収原資、約定履歴を翌日へ引き継ぐ
-- [夜間運用の完了条件・重複防止 v0.1](docs/run-integrity-v0.1.md) — 空レポート、取得漏れ、同時実行、重複注文、誤ったカットオフ前進を拒否
-- [公式情報源スキャン v0.1](docs/official-source-scan-v0.1.md) — EDINET取得、TDnet・会社IR・JPX調査キュー、未確認時の売買停止
-- [日次自動実行手順書 v0.1](docs/daily-automation-runbook-v0.1.md) — 平日1回の定時実行、注文候補、失敗時の再開、次回への引き継ぎ
-- [公開・非公開リポジトリの使い分け](docs/repository-roles-and-private-backup-v0.1.md) — 公開コードと暗号化バックアップの保存・復元手順
-- [日本株運用レビュースキル](.agents/skills/japan-stock-operator/SKILL.md) — 同じ判定とログ作成をCodexで再現
-- [運用ログ用テンプレート](operations/templates/decision-log-template.md) — 個人情報を含む実ログは `operations/private/` に保存
+## リポジトリの責務
 
-## Research rules
+| ディレクトリ | 内容 |
+|---|---|
+| `.github/workflows/` | 公開データ収集、CI、再現可能な自動化 |
+| `.agents/skills/` | 個人情報を含まない運用手順 |
+| `data/` | 公開可能で出典・生成方法を追跡できるデータ |
+| `docs/architecture/` | public/private の境界と全体設計 |
+| `docs/operations/` | PAPER/LIVE の運用仕様 |
+| `docs/rules/` | 凍結した戦略ルール |
+| `docs/research/` | 検証結果と再生成手順 |
+| `operations/templates/` | 秘密情報を含まない台帳テンプレート |
+| `scripts/`, `tests/` | 実装と回帰テスト |
 
-- [全銘柄日次株価のGitHub Actions運用 v0.1](docs/daily-stock-price-actions-v0.1.md) — JPX銘柄一覧とYahoo Finance chart endpointによるOHLCV収集・PR作成
+実運用では private リポジトリ `stock.jp.private` がこのリポジトリを submodule として固定し、`stock.jp/operations/private` を private 側の `operations/private` へ接続します。暗号化アーカイブは使わず、private Git の履歴と復旧訓練を運用証跡にします。詳細は[リポジトリ境界](docs/architecture/repository-boundaries.md)を参照してください。
 
-- [日本株テンバガー判定・運用ルール v0.3](docs/tenbagger-rule-v0.3.md) — 5倍時の原資回収と候補がある場合だけの再配分を含む凍結済みチャレンジャー
-- [日本株テンバガー判定・運用ルール v0.2](docs/tenbagger-rule-v0.2.md) — v0.4の銘柄選定・出口の基準版
-- [v0.4資金配分の12か月過去データ実験](docs/tenbagger-v0.4-allocation-replay-2025.md) — 2025年公式日足によるv0.2対v0.4の配分・最大DD診断
-- [v0.2価格ルール適用時の参考損益（2016–2026年）](docs/tenbagger-v0.2-price-only-pnl-2016-2026.md) — 現存テンバガー83銘柄の銘柄別・合計診断
-- [日本株テンバガー判定ルール v0.1](docs/tenbagger-rule-v0.1.md) — 凍結済み旧版
-- [日本株テンバガー仮説の予備検証（2016–2026年）](docs/tenbagger-validation-2016-2026.md)
+## はじめに
+
+~~~bash
+python3 -m venv .venv
+.venv/bin/pip install 'xlrd==2.0.2' 'certifi==2026.7.22' PyYAML
+.venv/bin/python -m unittest discover -s tests -v
+~~~
+
+初回状態を作る場合は private リポジトリから実行してください。単独で PAPER 用の一時環境を試す場合だけ、`operations/private/` をローカルに作成して次を実行します。
+
+~~~bash
+.venv/bin/python scripts/operation_state.py migrate
+.venv/bin/python scripts/operation_state.py validate
+.venv/bin/python scripts/operation_bootstrap.py check
+~~~
+
+`paper_go: true` になるまで PAPER を開始せず、`live_go: true` になるまで実注文を行いません。コードは注文候補を作りますが、証券会社へ自動送信しません。
+
+## ドキュメント
+
+- [ドキュメント索引](docs/README.md)
+- [公開・非公開リポジトリ境界](docs/architecture/repository-boundaries.md)
+- [運用ガバナンス](docs/operations/operation-governance-v0.1.md)
+- [LIVE 運用手順](docs/operations/live-operation-playbook-v0.1.md)
+- [PAPER/LIVE 準備判定](docs/operations/operation-readiness-v0.1.md)
+- [現行 PAPER ルール v0.4](docs/rules/tenbagger-rule-v0.4.md)
 - [検証用データと再生成方法](data/README.md)
+
+## セキュリティ境界
+
+公開 Issue、PR、Actions artifact、ログへ、口座情報、API キー、保有数量、取得原価、資金額、注文 ID、実運用の判断記録を出力しないでください。秘密情報を検知した場合は履歴からの除去と認証情報の失効を優先します。

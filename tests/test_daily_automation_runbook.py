@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNBOOK = ROOT / "docs/daily-automation-runbook-v0.1.md"
+RUNBOOK = ROOT / "docs/operations/daily-automation-runbook-v0.1.md"
 
 
 class DailyAutomationRunbookTest(unittest.TestCase):
