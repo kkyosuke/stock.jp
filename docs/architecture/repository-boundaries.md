@@ -35,7 +35,7 @@ public Actions は計算資源として活用しますが、private の値を Se
 - `state.json`、各台帳、run/handoff/order/decision log
 - 保有数量、取得原価、資金、税、証券会社注文ID
 - 利用者固有の損失許容、口座制約、GO/NO-GO 承認
-- 実運用の対象銘柄、障害記録、復旧訓練証跡
+- 実運用の対象銘柄、障害記録、clean-clone 確認証跡
 - public submodule の採用 commit
 
 private であっても API キー、パスワード、MFA 回復コード、cookie、秘密鍵は Git に保存しません。実行時の環境変数または認証情報管理機能を使用します。
@@ -52,7 +52,7 @@ private であっても API キー、パスワード、MFA 回復コード、coo
 4. 最新成功 run、handoff、未照合注文、台帳残高を照合する
 5. 復旧日時、private commit、public submodule commit、結果を private の証跡へ記録する
 
-private Git は利便性のための履歴であり、ホスティング障害やアカウント喪失に対する完全なバックアップではありません。LIVE 前に、アクセス制御された別媒体への private repository mirror と、その clone 復旧も確認します。これは application-level の暗号化 archive を復活させる要件ではありません。
+private Git はホスティング障害やアカウント喪失に対する完全なバックアップではありませんが、別媒体の mirror を LIVE の必須条件にはしません。GitHub を利用できない間は新しい注文を止めます。LIVE 前に一度、または setup、submodule、状態 schema、台帳構成を変更した後に、通常の private remote から現行構成を clean clone できることだけを確認します。これは application-level の暗号化 archive を復活させる要件ではありません。
 
 ## 移動判定
 
