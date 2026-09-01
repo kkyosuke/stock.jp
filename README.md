@@ -10,6 +10,7 @@
 - [夜間運用の完了条件・重複防止 v0.1](docs/run-integrity-v0.1.md) — 空レポート、取得漏れ、同時実行、重複注文、誤ったカットオフ前進を拒否
 - [公式情報源スキャン v0.1](docs/official-source-scan-v0.1.md) — EDINET取得、TDnet・会社IR・JPX調査キュー、未確認時の売買停止
 - [日次自動実行手順書 v0.1](docs/daily-automation-runbook-v0.1.md) — 平日1回の定時実行、注文候補、失敗時の再開、次回への引き継ぎ
+- [公開・非公開リポジトリの使い分け](docs/repository-roles-and-private-backup-v0.1.md) — 公開コードと暗号化バックアップの保存・復元手順
 - [日本株運用レビュースキル](.agents/skills/japan-stock-operator/SKILL.md) — 同じ判定とログ作成をCodexで再現
 - [運用ログ用テンプレート](operations/templates/decision-log-template.md) — 個人情報を含む実ログは `operations/private/` に保存
 

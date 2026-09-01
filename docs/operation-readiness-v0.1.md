@@ -70,7 +70,7 @@ age-keygen -y /利用者が管理する安全な場所/stock-jp-backup-key.txt
 
 `valid: true`を確認した後に`operation_bootstrap.py check`を再実行する。現在の環境には`age`がないため、インストールと鍵の保管場所は利用者側の準備が必要である。
 
-`PAPER`で暗号化環境を準備する前だけ、危険を理解した上で`--allow-plaintext`を明示できる。`LIVE`はこの例外を認めず、`age`と受信者指定が必須である。バックアップは`operations/private/backups/`に置かれGit追跡されない。端末故障に備える複製先は、利用者が管理する暗号化ストレージとする。
+`PAPER`で暗号化環境を準備する前だけ、危険を理解した上で`--allow-plaintext`を明示できる。`LIVE`はこの例外を認めず、`age`と受信者指定が必須である。バックアップは`operations/private/backups/`に置かれGit追跡されない。端末故障に備える遠隔コピーは、[公開・非公開リポジトリの使い分け](repository-roles-and-private-backup-v0.1.md)に従い、`kkyosuke/stock.jp.private`の非公開GitHub Releaseへ暗号化済みファイルだけを保存する。
 
 `OPERATION_BACKUP_AGE_RECIPIENT`が設定済みなら`--age-recipient`は省略できる。夜間作業計画には、最終バックアップから31日を超えた時点でバックアップタスクが自動追加される。受信者が未設定なら平文へ自動フォールバックせず、タスクを延期して利用者へ報告する。
 
