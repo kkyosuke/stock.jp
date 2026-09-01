@@ -935,6 +935,22 @@ class FinalLivePromotionTest(unittest.TestCase):
         )
 
     @patch("scripts.live_gate_evidence.evaluate_all_live_requirements")
+    def test_future_final_approval_is_rejected(self, evaluate) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fresh, approval_path, _ = self._write_bundle(root)
+            approval = json.loads(approval_path.read_text(encoding="utf-8"))
+            approval["approved_at_jst"] = "2999-01-01T09:00:00+09:00"
+            approval_path.write_text(json.dumps(approval), encoding="utf-8")
+            evaluate.return_value = fresh
+            result = evaluate_live_promotion(root=root)
+        self.assertFalse(result["eligible"])
+        self.assertIn(
+            "final approval approved_at_jst cannot be in the future",
+            result["blockers"],
+        )
+
+    @patch("scripts.live_gate_evidence.evaluate_all_live_requirements")
     def test_apply_atomically_promotes_policy_and_typed_bundle_remains_valid(self, evaluate) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
