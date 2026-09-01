@@ -480,11 +480,15 @@ def evaluate_historical_replay(
 
 
 def evaluate_paper_duration(
-    *, root: Path = PROJECT_ROOT, history_path: Path | None = None
+    *,
+    root: Path = PROJECT_ROOT,
+    history_path: Path | None = None,
+    at: datetime | None = None,
 ) -> dict[str, Any]:
     """Require at least 365 elapsed days of recorded v0.4 PAPER operation."""
     root = root.resolve()
     private_root = (root / "operations/private").resolve()
+    reference_time = (at or datetime.now(tz=JST)).astimezone(JST)
     history_path = history_path or (private_root / "run-history.csv")
     blockers: list[str] = []
     inputs: list[dict[str, str]] = []
@@ -562,6 +566,12 @@ def evaluate_paper_duration(
         except ValueError:
             blockers.append(f"completed v0.4 PAPER run has invalid dates: {run_id}")
             continue
+        if run_id != price_date.isoformat():
+            blockers.append(f"completed PAPER run_id must equal price_date: {run_id}")
+            continue
+        if completed > reference_time or price_date > reference_time.date():
+            blockers.append(f"completed PAPER run cannot be in the future: {run_id}")
+            continue
         report_value = row.get("report_path", "").strip()
         if not report_value:
             blockers.append(f"completed run report path is unsafe: {run_id}")
@@ -571,6 +581,10 @@ def evaluate_paper_duration(
             report.relative_to(private_root)
         except ValueError:
             blockers.append(f"completed run report is outside private storage: {run_id}")
+            continue
+        expected_report = (private_root / "runs" / run_id / "report.md").resolve()
+        if report != expected_report:
+            blockers.append(f"completed run report path does not match run_id: {run_id}")
             continue
         if not report.is_file():
             blockers.append(f"completed run report is missing: {run_id}")
@@ -725,6 +739,8 @@ def evaluate_shadow_run(
             blockers.append(
                 "latest shadow runs do not cover 20 consecutive tracked trading sessions"
             )
+        if archive_dates and selected_dates[-1] != max(archive_dates):
+            blockers.append("shadow window does not end at the latest tracked price session")
     else:
         expected_dates = []
 
@@ -1278,6 +1294,10 @@ def evaluate_personal_risk(
         blockers.append("broker_rules_checked_at_jst must include a UTC offset")
     if rules_checked and reviewed and rules_checked.date() != reviewed.date():
         blockers.append("broker rules must be checked on the review date")
+    if rules_checked and reviewed and rules_checked > reviewed:
+        blockers.append("broker rules must be checked before completing the review")
+    if rules_checked and rules_checked > reference_time:
+        blockers.append("broker_rules_checked_at_jst cannot be in the future")
     if not isinstance(checklist.get("emergency_contact_location"), str) or not checklist.get(
         "emergency_contact_location", ""
     ).strip():
@@ -1442,10 +1462,13 @@ def evaluate_v04_promotion(
             blockers.append("v0.4 review approved_by is required")
         if not _aware_datetime(review.get("approved_at_jst")):
             blockers.append("v0.4 review approved_at_jst must include a UTC offset")
-        elif _aware_datetime(replay.get("generated_at_jst")) and _parse_aware_datetime(
-            review["approved_at_jst"]
-        ) < _parse_aware_datetime(replay["generated_at_jst"]):
-            blockers.append("v0.4 review cannot precede replay generation")
+            promotion_approved_at = None
+        else:
+            promotion_approved_at = _parse_aware_datetime(review["approved_at_jst"])
+            if _aware_datetime(replay.get("generated_at_jst")) and promotion_approved_at < _parse_aware_datetime(
+                replay["generated_at_jst"]
+            ):
+                blockers.append("v0.4 review cannot precede replay generation")
         for name, path in (
             ("replay_result_sha256", replay_path),
             ("historical_replay_evidence_sha256", historical_evidence_path),
@@ -1453,6 +1476,19 @@ def evaluate_v04_promotion(
         ):
             if not path.is_file() or review.get(name) != _sha256(path):
                 blockers.append(f"v0.4 review {name} does not match")
+        for role, evidence in (
+            ("historical replay", historical),
+            ("paper duration", paper),
+        ):
+            evaluated_at = evidence.get("evaluated_at_jst")
+            if evidence and not _aware_datetime(evaluated_at):
+                blockers.append(f"{role} evidence evaluated_at_jst is invalid")
+            elif (
+                evidence
+                and promotion_approved_at
+                and promotion_approved_at < _parse_aware_datetime(evaluated_at)
+            ):
+                blockers.append(f"v0.4 review predates {role} evidence")
         acknowledgements = review.get("acknowledgements")
         if not isinstance(acknowledgements, dict):
             acknowledgements = {}
@@ -1670,6 +1706,8 @@ def evaluate_live_promotion(
             approved_at = None
         else:
             approved_at = _parse_aware_datetime(approval["approved_at_jst"])
+            if approved_at > datetime.now(tz=JST):
+                blockers.append("final approval approved_at_jst cannot be in the future")
         for name in ("private_commit_reviewed", "public_submodule_commit_reviewed"):
             value = approval.get(name)
             if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{40}", value):
@@ -1885,6 +1923,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "paper-duration", help="validate at least 12 months of v0.4 PAPER runs"
     )
     paper_duration.add_argument("--history", type=Path)
+    paper_duration.add_argument("--at", type=str)
     paper_duration.add_argument("--write-evidence", type=Path)
     shadow = subparsers.add_parser(
         "shadow-run", help="validate 20 consecutive real-data PAPER sessions"
@@ -1943,6 +1982,7 @@ def main(argv: list[str] | None = None) -> int:
         result = evaluate_paper_duration(
             root=args.root,
             history_path=args.history,
+            at=_parse_aware_datetime(args.at) if args.at else None,
         )
     elif args.command == "shadow-run":
         result = evaluate_shadow_run(

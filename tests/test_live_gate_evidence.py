@@ -287,6 +287,20 @@ class PaperDurationEvidenceTest(unittest.TestCase):
         self.assertFalse(result["eligible"])
         self.assertIn("completed run report is missing: 2025-12-01", result["blockers"])
 
+    def test_future_run_cannot_complete_the_duration_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_history(root)
+            result = evaluate_paper_duration(
+                root=root,
+                at=datetime.fromisoformat("2026-08-31T23:00:00+09:00"),
+            )
+        self.assertFalse(result["eligible"])
+        self.assertIn(
+            "completed PAPER run cannot be in the future: 2026-09-01",
+            result["blockers"],
+        )
+
     def test_any_live_run_before_promotion_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -393,6 +407,23 @@ class ShadowRunEvidenceTest(unittest.TestCase):
         self.assertFalse(result["eligible"])
         self.assertIn(
             "duplicate ticket_id across shadow runs: DUPLICATE", result["blockers"]
+        )
+
+    @patch("scripts.live_gate_evidence.validate_run_artifacts")
+    def test_shadow_window_must_end_at_latest_archive_session(self, validate) -> None:
+        validate.return_value = {}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_shadow(root)
+            _write(
+                root / "data/daily-prices/2026/2026-09-01.csv",
+                "code,close\n1301,1001\n",
+            )
+            result = evaluate_shadow_run(root=root)
+        self.assertFalse(result["eligible"])
+        self.assertIn(
+            "shadow window does not end at the latest tracked price session",
+            result["blockers"],
         )
 
 
@@ -652,6 +683,23 @@ class PersonalRiskEvidenceTest(unittest.TestCase):
             result["blockers"],
         )
 
+    def test_broker_rules_cannot_be_checked_after_review_completion(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = self._write_checklist(root)
+            checklist = json.loads(path.read_text(encoding="utf-8"))
+            checklist["broker_rules_checked_at_jst"] = "2026-09-01T08:30:00+09:00"
+            path.write_text(json.dumps(checklist), encoding="utf-8")
+            result = evaluate_personal_risk(
+                root=root,
+                at=datetime.fromisoformat("2026-09-01T09:00:00+09:00"),
+            )
+        self.assertFalse(result["eligible"])
+        self.assertIn(
+            "broker rules must be checked before completing the review",
+            result["blockers"],
+        )
+
 
 class V04PromotionEvidenceTest(unittest.TestCase):
     def _write_promotion(self, root: Path) -> tuple[Path, Path, Path, Path]:
@@ -691,6 +739,7 @@ class V04PromotionEvidenceTest(unittest.TestCase):
                 {
                     "schema_version": "1.0",
                     "gate": "historical_replay_2025_2026_accepted",
+                    "evaluated_at_jst": "2026-08-31T22:00:00+09:00",
                     "eligible": True,
                     "blockers": [],
                 }
@@ -702,6 +751,7 @@ class V04PromotionEvidenceTest(unittest.TestCase):
                 {
                     "schema_version": "1.0",
                     "gate": "minimum_12_month_paper_trade",
+                    "evaluated_at_jst": "2026-08-31T22:10:00+09:00",
                     "eligible": True,
                     "blockers": [],
                 }
@@ -772,6 +822,22 @@ class V04PromotionEvidenceTest(unittest.TestCase):
             result = evaluate_v04_promotion(root=root)
         self.assertFalse(result["eligible"])
         self.assertTrue(any("paper_duration_evidence is missing" in item for item in result["blockers"]))
+
+    def test_v04_review_cannot_predate_paper_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _, _, paper_path, review_path = self._write_promotion(root)
+            paper = json.loads(paper_path.read_text(encoding="utf-8"))
+            paper["evaluated_at_jst"] = "2026-09-01T10:00:00+09:00"
+            paper_path.write_text(json.dumps(paper), encoding="utf-8")
+            review = json.loads(review_path.read_text(encoding="utf-8"))
+            review["paper_duration_evidence_sha256"] = hashlib.sha256(
+                paper_path.read_bytes()
+            ).hexdigest()
+            review_path.write_text(json.dumps(review), encoding="utf-8")
+            result = evaluate_v04_promotion(root=root)
+        self.assertFalse(result["eligible"])
+        self.assertIn("v0.4 review predates paper duration evidence", result["blockers"])
 
 
 class FinalLivePromotionTest(unittest.TestCase):
