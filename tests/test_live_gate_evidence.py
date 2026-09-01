@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import csv
+from datetime import date
 from pathlib import Path
 import tempfile
 import unittest
 
 from scripts.live_gate_evidence import (
     evaluate_historical_replay,
+    evaluate_paper_duration,
     evaluate_point_in_time,
     write_private_evidence,
 )
@@ -186,6 +189,103 @@ class HistoricalReplayEvidenceTest(unittest.TestCase):
             "private review does not bind the current replay result",
             result["blockers"],
         )
+
+
+class PaperDurationEvidenceTest(unittest.TestCase):
+    FIELDS = [
+        "run_id",
+        "attempt",
+        "started_at_jst",
+        "completed_at_jst",
+        "status",
+        "operation_mode",
+        "active_rule_version",
+        "source_cutoff_jst",
+        "price_date",
+        "report_path",
+        "order_count",
+        "alert_count",
+        "data_gap_count",
+        "next_run_at_jst",
+        "summary",
+    ]
+
+    def _write_history(self, root: Path, *, short: bool = False) -> Path:
+        private = root / "operations/private"
+        private.mkdir(parents=True)
+        rows = []
+        for offset in range(13):
+            year = 2025 + (8 + offset) // 12
+            month = (8 + offset) % 12 + 1
+            run_date = date(year, month, 1)
+            if short and offset > 2:
+                break
+            run_id = run_date.isoformat()
+            report = private / f"runs/{run_id}/report.md"
+            _write(report, f"# {run_id}\n")
+            rows.append(
+                {
+                    "run_id": run_id,
+                    "attempt": "1",
+                    "started_at_jst": f"{run_id}T18:30:00+09:00",
+                    "completed_at_jst": f"{run_id}T19:00:00+09:00",
+                    "status": "COMPLETED",
+                    "operation_mode": "PAPER",
+                    "active_rule_version": "v0.4",
+                    "source_cutoff_jst": f"{run_id}T18:30:00+09:00",
+                    "price_date": run_id,
+                    "report_path": f"operations/private/runs/{run_id}/report.md",
+                    "order_count": "0",
+                    "alert_count": "0",
+                    "data_gap_count": "0",
+                    "next_run_at_jst": "",
+                    "summary": "test",
+                }
+            )
+        history = private / "run-history.csv"
+        with history.open("w", encoding="utf-8", newline="") as target:
+            writer = csv.DictWriter(target, fieldnames=self.FIELDS)
+            writer.writeheader()
+            writer.writerows(rows)
+        return history
+
+    def test_365_days_with_every_calendar_month_is_eligible(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_history(root)
+            result = evaluate_paper_duration(root=root)
+        self.assertTrue(result["eligible"], result["blockers"])
+        self.assertEqual(result["metrics"]["elapsed_days"], 365)
+        self.assertEqual(result["metrics"]["calendar_month_count"], 13)
+
+    def test_short_paper_history_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_history(root, short=True)
+            result = evaluate_paper_duration(root=root)
+        self.assertFalse(result["eligible"])
+        self.assertIn(
+            "v0.4 PAPER elapsed duration is less than 365 days", result["blockers"]
+        )
+
+    def test_missing_report_is_not_counted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_history(root)
+            (root / "operations/private/runs/2025-12-01/report.md").unlink()
+            result = evaluate_paper_duration(root=root)
+        self.assertFalse(result["eligible"])
+        self.assertIn("completed run report is missing: 2025-12-01", result["blockers"])
+
+    def test_any_live_run_before_promotion_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            history = self._write_history(root)
+            text = history.read_text(encoding="utf-8")
+            history.write_text(text.replace(",PAPER,v0.4,", ",LIVE,v0.4,", 1))
+            result = evaluate_paper_duration(root=root)
+        self.assertFalse(result["eligible"])
+        self.assertIn("pre-promotion LIVE run exists in run history", result["blockers"])
 
 
 if __name__ == "__main__":

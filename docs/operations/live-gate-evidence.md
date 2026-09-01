@@ -37,3 +37,17 @@ stock.jp/.venv/bin/python stock.jp/scripts/live_gate_evidence.py \
 公開側の `data/historical-replay/replay-result-2025-2026.json` は、point-in-time manifest のハッシュ、欠損・look-ahead 違反0件、取引数、return、maximum drawdown、benchmark と、取引・月次・metrics 成果物のハッシュを持つ。private 側の `historical-replay-review.json` には、現在の再生結果のハッシュ、`ACCEPT`、承認者・承認日時、drawdown・集中損失・データ制約を確認した事実を記録する。
 
 再生結果を変更すると過去の review は無効になる。成績の数値だけでは自動受入せず、利用者の review がない状態では gate を `false` のままにする。
+
+## v0.4 PAPER を最低12か月
+
+`minimum_12_month_paper_trade` は private の `run-history.csv` と各成功 report から判定する。
+
+~~~bash
+stock.jp/.venv/bin/python stock.jp/scripts/live_gate_evidence.py \
+  --root stock.jp paper-duration \
+  --write-evidence stock.jp/operations/private/evidence/paper-12-months.json
+~~~
+
+最新 attempt が `COMPLETED / PAPER / v0.4` の run だけを数え、最初と最後の完了日の間が365日以上、12以上の暦月に成功記録があり、期間中に成功が1件もない暦月がないことを要求する。対応する private report がない run は数えない。昇格前に `LIVE` run が記録されていた場合も失敗する。
+
+一時 simulation の20日や履歴再生の日数を PAPER 期間へ算入しない。実時間が365日経過する前に、この gate をコードや手動編集で短縮しない。

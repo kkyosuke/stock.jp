@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 from datetime import date, datetime
 import hashlib
 import json
@@ -20,6 +21,7 @@ JST = ZoneInfo("Asia/Tokyo")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 POINT_IN_TIME_GATE = "point_in_time_full_universe_validation"
 HISTORICAL_REPLAY_GATE = "historical_replay_2025_2026_accepted"
+PAPER_DURATION_GATE = "minimum_12_month_paper_trade"
 
 
 def _read_object(path: Path) -> dict[str, Any]:
@@ -56,6 +58,13 @@ def _aware_datetime(value: Any) -> bool:
     except ValueError:
         return False
     return parsed.tzinfo is not None
+
+
+def _parse_aware_datetime(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("datetime must include a UTC offset")
+    return parsed.astimezone(JST)
 
 
 def _iso_date(value: Any) -> bool:
@@ -419,6 +428,161 @@ def evaluate_historical_replay(
     )
 
 
+def evaluate_paper_duration(
+    *, root: Path = PROJECT_ROOT, history_path: Path | None = None
+) -> dict[str, Any]:
+    """Require at least 365 elapsed days of recorded v0.4 PAPER operation."""
+    root = root.resolve()
+    private_root = (root / "operations/private").resolve()
+    history_path = history_path or (private_root / "run-history.csv")
+    blockers: list[str] = []
+    inputs: list[dict[str, str]] = []
+    try:
+        history_path.resolve().relative_to(private_root)
+    except ValueError:
+        blockers.append("run history path must stay under operations/private")
+    if not history_path.is_file():
+        return _result(
+            gate=PAPER_DURATION_GATE,
+            blockers=[*blockers, f"run history is missing: {history_path}"],
+            metrics={},
+            inputs=[],
+        )
+
+    try:
+        with history_path.open(encoding="utf-8", newline="") as source:
+            reader = csv.DictReader(source)
+            rows = list(reader)
+            fields = set(reader.fieldnames or [])
+    except (OSError, csv.Error) as error:
+        return _result(
+            gate=PAPER_DURATION_GATE,
+            blockers=[*blockers, f"run history is invalid: {error}"],
+            metrics={},
+            inputs=[],
+        )
+    required_fields = {
+        "run_id",
+        "attempt",
+        "completed_at_jst",
+        "status",
+        "operation_mode",
+        "active_rule_version",
+        "price_date",
+        "report_path",
+    }
+    missing_fields = required_fields - fields
+    if missing_fields:
+        blockers.append(
+            "run history fields are missing: " + ", ".join(sorted(missing_fields))
+        )
+
+    latest_by_run: dict[str, tuple[int, dict[str, str]]] = {}
+    for index, row in enumerate(rows, start=2):
+        run_id = row.get("run_id", "").strip()
+        try:
+            attempt = int(row.get("attempt", ""))
+        except ValueError:
+            blockers.append(f"run history row {index} has an invalid attempt")
+            continue
+        if not run_id:
+            blockers.append(f"run history row {index} has no run_id")
+            continue
+        previous = latest_by_run.get(run_id)
+        if previous is None or attempt > previous[0]:
+            latest_by_run[run_id] = (attempt, row)
+
+    latest_rows = [value[1] for value in latest_by_run.values()]
+    if any(row.get("operation_mode", "").strip() == "LIVE" for row in latest_rows):
+        blockers.append("pre-promotion LIVE run exists in run history")
+
+    successful: list[tuple[datetime, date, str]] = []
+    for row in latest_rows:
+        if not (
+            row.get("status", "").strip() == "COMPLETED"
+            and row.get("operation_mode", "").strip() == "PAPER"
+            and row.get("active_rule_version", "").strip() == "v0.4"
+        ):
+            continue
+        run_id = row.get("run_id", "").strip()
+        try:
+            completed = _parse_aware_datetime(row.get("completed_at_jst", ""))
+            price_date = date.fromisoformat(row.get("price_date", ""))
+        except ValueError:
+            blockers.append(f"completed v0.4 PAPER run has invalid dates: {run_id}")
+            continue
+        report_value = row.get("report_path", "").strip()
+        if not report_value:
+            blockers.append(f"completed run report path is unsafe: {run_id}")
+            continue
+        report = (root / report_value).resolve()
+        try:
+            report.relative_to(private_root)
+        except ValueError:
+            blockers.append(f"completed run report is outside private storage: {run_id}")
+            continue
+        if not report.is_file():
+            blockers.append(f"completed run report is missing: {run_id}")
+            continue
+        successful.append((completed, price_date, run_id))
+
+    successful.sort()
+    if successful:
+        first_completed = successful[0][0]
+        last_completed = successful[-1][0]
+        elapsed_days = (last_completed.date() - first_completed.date()).days
+        months = sorted({completed.strftime("%Y-%m") for completed, _, _ in successful})
+        if elapsed_days < 365:
+            blockers.append("v0.4 PAPER elapsed duration is less than 365 days")
+        if len(months) < 12:
+            blockers.append("v0.4 PAPER does not contain successful runs in 12 months")
+        cursor = date(first_completed.year, first_completed.month, 1)
+        final_month = date(last_completed.year, last_completed.month, 1)
+        expected_months: list[str] = []
+        while cursor <= final_month:
+            expected_months.append(cursor.strftime("%Y-%m"))
+            if cursor.month == 12:
+                cursor = date(cursor.year + 1, 1, 1)
+            else:
+                cursor = date(cursor.year, cursor.month + 1, 1)
+        empty_months = sorted(set(expected_months) - set(months))
+        if empty_months:
+            blockers.append(
+                "v0.4 PAPER has calendar months without a successful run: "
+                + ", ".join(empty_months)
+            )
+    else:
+        first_completed = None
+        last_completed = None
+        elapsed_days = 0
+        months = []
+        blockers.append("no completed v0.4 PAPER runs were found")
+
+    inputs.append(
+        {
+            "role": "run_history",
+            "path": "operations/private/run-history.csv",
+            "sha256": _sha256(history_path),
+        }
+    )
+    return _result(
+        gate=PAPER_DURATION_GATE,
+        blockers=blockers,
+        metrics={
+            "first_completed_at_jst": first_completed.isoformat(timespec="seconds")
+            if first_completed
+            else None,
+            "last_completed_at_jst": last_completed.isoformat(timespec="seconds")
+            if last_completed
+            else None,
+            "elapsed_days": elapsed_days,
+            "successful_run_count": len(successful),
+            "calendar_month_count": len(months),
+        },
+        inputs=inputs,
+    )
+
+
 def write_private_evidence(*, root: Path, path: Path, result: dict[str, Any]) -> None:
     """Write only successful evidence, and only below operations/private/evidence."""
     if result.get("eligible") is not True:
@@ -455,6 +619,11 @@ def _build_parser() -> argparse.ArgumentParser:
     replay.add_argument("--result", type=Path)
     replay.add_argument("--review", type=Path)
     replay.add_argument("--write-evidence", type=Path)
+    paper_duration = subparsers.add_parser(
+        "paper-duration", help="validate at least 12 months of v0.4 PAPER runs"
+    )
+    paper_duration.add_argument("--history", type=Path)
+    paper_duration.add_argument("--write-evidence", type=Path)
     return parser
 
 
@@ -470,6 +639,11 @@ def main(argv: list[str] | None = None) -> int:
             root=args.root,
             result_path=args.result,
             review_path=args.review,
+        )
+    elif args.command == "paper-duration":
+        result = evaluate_paper_duration(
+            root=args.root,
+            history_path=args.history,
         )
     else:  # pragma: no cover - argparse prevents this branch
         raise AssertionError(args.command)
