@@ -80,7 +80,7 @@ GitHub Actionsが平日18:30にJPXの現行内国株式全体をYahoo Financeか
 
 ## 4. 株価の定時収集とAIの一回指示
 
-株価の定時収集は`.github/workflows/daily-stock-prices.yml`を正本とする。平日18:30に全市場を取得し、archive、全回帰test、compile、20日smokeが成功した場合だけデータPRを作成してauto-mergeする。失敗時はmergeせず、人が`latest.json`の取得エラー、母集団件数、正常価格件数、checksum、意図しない過去日変更を確認する。翌朝private側がpublic `main`のsubmodule pointer更新PRを検証してauto-mergeする。PRが未マージ、checkoutが古い、active対象が欠損、または全市場coverageが98%未満ならreadinessが停止する。
+株価の定時収集は`.github/workflows/daily-stock-prices.yml`を正本とする。平日18:30に全市場を取得し、archive、全回帰test、compile、20日smokeが成功した場合だけデータPRを作成する。botが作成したPRの通常イベントには依存せず、PR branchを指定して必須`operation-tests`を`workflow_dispatch`する。required `test`がPRの最新commitで成功した後のmergeはGitHubのauto-mergeに任せる。失敗時はmergeせず、人が`latest.json`の取得エラー、母集団件数、正常価格件数、checksum、意図しない過去日変更を確認する。翌朝private側がpublic `main`のsubmodule pointer更新PRを検証してauto-mergeする。PRが未マージ、checkoutが古い、active対象が欠損、または全市場coverageが98%未満ならreadinessが停止する。
 
 Yahoo Financeは非公式の二次データである。PAPERの計算入力には使えるが、売買判断を確定する前に会社IR、TDnet、JPXの公式価格・コーポレートアクション、現物株カレンダー、EDINETを一次資料で確認する。確認不能な日は`WAIT`または`fail`とする。
 
