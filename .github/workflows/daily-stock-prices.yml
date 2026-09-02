@@ -16,6 +16,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
+  actions: write
   contents: write
   pull-requests: write
 
@@ -89,6 +90,16 @@ jobs:
             - 取得失敗: `latest.json` とCSVの `取得状態` を確認
           add-paths: |
             data/daily-prices
+
+      - name: Dispatch required operation tests
+        if: steps.data-pr.outputs.pull-request-number != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BRANCH: automation/daily-stock-prices
+        run: |
+          gh workflow run operation-tests.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$PR_BRANCH"
 
       - name: Enable auto-merge after successful validation
         if: steps.data-pr.outputs.pull-request-number != ''
