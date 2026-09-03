@@ -170,6 +170,7 @@ def evaluate_investment_case(document: dict[str, Any]) -> dict[str, Any]:
     securities = _get(document, "capital.potential_securities")
     potential_shares = 0.0
     exercise_cash = 0.0
+    exercise_cash_complete = True
     variable_strike_ids: list[str] = []
     if not isinstance(securities, list):
         missing.append("capital.potential_securities")
@@ -201,6 +202,8 @@ def evaluate_investment_case(document: dict[str, Any]) -> dict[str, Any]:
                 potential_shares += shares
             if proceeds is not None:
                 exercise_cash += proceeds
+            else:
+                exercise_cash_complete = False
             if variable is True:
                 variable_strike_ids.append(str(security.get("id") or index))
 
@@ -397,7 +400,9 @@ def evaluate_investment_case(document: dict[str, Any]) -> dict[str, Any]:
                 partial["dilution"] = {
                     "n0_fully_diluted_shares": partial_n0,
                     "potential_shares_at_10x": potential_shares,
-                    "exercise_cash_separate_from_shares": exercise_cash,
+                    "exercise_cash_separate_from_shares": (
+                        exercise_cash if exercise_cash_complete else None
+                    ),
                 }
                 partial["current_fully_diluted_market_cap"] = price * partial_n0
         return _result("INCOMPLETE", document, missing, partial_calculations=partial)

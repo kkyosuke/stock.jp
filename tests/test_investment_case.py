@@ -127,6 +127,26 @@ class InvestmentCaseTest(unittest.TestCase):
         self.assertIn("market.sam_3y", result["missing_fields"])
         self.assertIn("capital.potential_securities", result["missing_fields"])
 
+    def test_partial_dilution_does_not_turn_unknown_exercise_cash_into_zero(
+        self,
+    ) -> None:
+        case = complete_case()
+        case["capital"]["potential_securities"][0]["exercise_cash"] = None
+        case["market"]["sam_3y"] = None
+
+        result = evaluate_investment_case(case)
+
+        self.assertEqual(result["status"], "INCOMPLETE")
+        self.assertEqual(
+            result["partial_calculations"]["dilution"]["n0_fully_diluted_shares"],
+            1_000_000,
+        )
+        self.assertIsNone(
+            result["partial_calculations"]["dilution"][
+                "exercise_cash_separate_from_shares"
+            ]
+        )
+
     def test_som_shortfall_is_a_final_failure_not_an_incomplete_result(self) -> None:
         case = complete_case()
         case["market"]["capacity_revenue_limit"] = 100_000_000
