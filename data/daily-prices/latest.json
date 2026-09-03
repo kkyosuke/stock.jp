@@ -8,20 +8,20 @@
   "universe": {
     "provider": "JPX TSE-listed issues monthly spreadsheet",
     "scope": "current domestic stocks",
-    "count": 3713
+    "count": 3707
   },
-  "latest_trading_date": "2026-09-02",
+  "latest_trading_date": "2026-09-03",
   "fetch": {
-    "success_count": 3713,
+    "success_count": 3707,
     "error_count": 0,
     "error_codes": []
   },
   "latest_session": {
-    "date": "2026-09-02",
-    "file": "2026/2026-09-02.csv",
-    "sha256": "3b441068679c31b45bb150f482365b9d4e20def345751e3b412c0ff1f8efcf2a",
-    "quote_count": 3672,
-    "no_quote_count": 41,
+    "date": "2026-09-03",
+    "file": "2026/2026-09-03.csv",
+    "sha256": "cc3a45050e9285f31eb6f768fdc8453075b1e824cc3f4089b41056ea3f2e030a",
+    "quote_count": 3657,
+    "no_quote_count": 50,
     "fetch_error_count": 0
   }
 }
