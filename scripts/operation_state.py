@@ -156,6 +156,35 @@ def _normalized_source_config(
             **template.get(section, {}),
             **(configured_section if isinstance(configured_section, dict) else {}),
         }
+    template_market = template.get("market_regime", {})
+    configured_market = (
+        config.get("market_regime", {})
+        if isinstance(config.get("market_regime"), dict)
+        else {}
+    )
+    for field in ("minimum_vi_observations", "breadth_lookback_sessions"):
+        normalized["market_regime"][field] = max(
+            int(template_market[field]),
+            int(configured_market.get(field, template_market[field])),
+        )
+    normalized["market_regime"]["minimum_breadth_coverage"] = max(
+        float(template_market["minimum_breadth_coverage"]),
+        float(
+            configured_market.get(
+                "minimum_breadth_coverage",
+                template_market["minimum_breadth_coverage"],
+            )
+        ),
+    )
+    normalized["market_regime"]["maximum_breadth_close_age_days"] = min(
+        int(template_market["maximum_breadth_close_age_days"]),
+        int(
+            configured_market.get(
+                "maximum_breadth_close_age_days",
+                template_market["maximum_breadth_close_age_days"],
+            )
+        ),
+    )
     normalized["initial_lookback_days"] = max(
         int(template.get("initial_lookback_days", 7)),
         int(config.get("initial_lookback_days", 0)),

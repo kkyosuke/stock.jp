@@ -36,6 +36,12 @@ VALID_ACTIONS = {"BUY", "WATCH", "WAIT", "KEEP", "ADD", "REDUCE", "SELL", "NO-AC
 TRADE_ACTIONS = {"BUY", "ADD", "REDUCE", "SELL"}
 VALID_PRIORITIES = {"CRITICAL", "HIGH", "NORMAL", "LOW"}
 TERMINAL_TASK_STATUSES = {"COMPLETED", "DEFERRED"}
+SYSTEM_ASSESSMENT_RULE_IDS = {
+    "OPS-ASSESSMENT-PASS",
+    "OPS-TENX-FAIL",
+    "OPS-MRS-BLOCK",
+    "OPS-ASSESSMENT-INCOMPLETE",
+}
 
 
 class NightlyArtifactError(ValueError):
@@ -106,6 +112,56 @@ def _active_targets(path: Path, *, holding: bool) -> list[dict[str, str]]:
             }
         )
     return targets
+
+
+def _assessment_action_fields(assessment: dict[str, Any], code: str) -> dict[str, str]:
+    company_assessment = next(
+        (
+            item
+            for item in assessment.get("companies", [])
+            if isinstance(item, dict) and str(item.get("code", "")) == code
+        ),
+        {},
+    )
+    market = assessment.get("market_regime", {})
+    case_status = str(company_assessment.get("status", "INPUT_REQUIRED"))
+    market_state = str(
+        market.get("state", "UNAVAILABLE")
+        if isinstance(market, dict)
+        else "UNAVAILABLE"
+    )
+    if case_status == "PASS" and market_state in {"NORMAL", "CAUTION"}:
+        return {
+            "next_action": "WATCH",
+            "rule_ids": "OPS-ASSESSMENT-PASS",
+            "trigger_condition": (
+                f"計算合格、MRS={market_state}。人が一次資料と価格を最終確認"
+            ),
+            "human_action": "根拠をレビューし、条件成立時だけBUY/ADD候補へ変更する",
+        }
+    if case_status == "FAIL":
+        failures = "; ".join(
+            str(value) for value in company_assessment.get("failures", [])
+        )
+        return {
+            "next_action": "WAIT",
+            "rule_ids": "OPS-TENX-FAIL",
+            "trigger_condition": failures or "10倍経路が不成立",
+            "human_action": "新しい一次資料が出るまで購入しない",
+        }
+    if market_state in {"STRESS", "UNAVAILABLE"}:
+        return {
+            "next_action": "WAIT",
+            "rule_ids": "OPS-MRS-BLOCK",
+            "trigger_condition": f"MRS={market_state}",
+            "human_action": "正式MRSがNORMALまたはCAUTIONになるまで購入しない",
+        }
+    return {
+        "next_action": "WAIT",
+        "rule_ids": "OPS-ASSESSMENT-INCOMPLETE",
+        "trigger_condition": f"企業評価={case_status}",
+        "human_action": "assessment-status.jsonの不足入力を一次資料から補う",
+    }
 
 
 def next_trading_date(run_dir: Path, after_date: date) -> tuple[str | None, bool]:
@@ -439,38 +495,7 @@ def create_nightly_artifacts(
             if code in seen:
                 continue
             seen.add(code)
-            company_assessment = next(
-                (
-                    item
-                    for item in assessment.get("companies", [])
-                    if isinstance(item, dict) and str(item.get("code", "")) == code
-                ),
-                {},
-            )
-            market = assessment.get("market_regime", {})
-            case_status = str(company_assessment.get("status", "INPUT_REQUIRED"))
-            market_state = str(market.get("state", "UNAVAILABLE"))
-            if case_status == "PASS" and market_state in {"NORMAL", "CAUTION"}:
-                action, rule_ids = "WATCH", "OPS-ASSESSMENT-PASS"
-                trigger = f"計算合格、MRS={market_state}。人が一次資料と価格を最終確認"
-                human_action = "根拠をレビューし、条件成立時だけBUY/ADD候補へ変更する"
-            elif case_status == "FAIL":
-                action, rule_ids = "WAIT", "OPS-TENX-FAIL"
-                trigger = (
-                    "; ".join(
-                        str(value) for value in company_assessment.get("failures", [])
-                    )
-                    or "10倍経路が不成立"
-                )
-                human_action = "新しい一次資料が出るまで購入しない"
-            elif market_state in {"STRESS", "UNAVAILABLE"}:
-                action, rule_ids = "WAIT", "OPS-MRS-BLOCK"
-                trigger = f"MRS={market_state}"
-                human_action = "正式MRSがNORMALまたはCAUTIONになるまで購入しない"
-            else:
-                action, rule_ids = "WAIT", "OPS-ASSESSMENT-INCOMPLETE"
-                trigger = f"企業評価={case_status}"
-                human_action = "assessment-status.jsonの不足入力を一次資料から補う"
+            assessment_fields = _assessment_action_fields(assessment, code)
             rows.append(
                 {
                     **dict.fromkeys(ACTION_FIELDS, ""),
@@ -480,11 +505,11 @@ def create_nightly_artifacts(
                     "code": code,
                     "company": target["company"],
                     "current_status": target["current_status"],
-                    "next_action": action,
-                    "rule_ids": rule_ids,
+                    "next_action": assessment_fields["next_action"],
+                    "rule_ids": assessment_fields["rule_ids"],
                     "trigger_type": "nightly_review",
-                    "trigger_condition": trigger,
-                    "human_action": human_action,
+                    "trigger_condition": assessment_fields["trigger_condition"],
+                    "human_action": assessment_fields["human_action"],
                     "review_by_jst": _parse_jst(at)
                     .replace(hour=23, minute=59, second=59)
                     .isoformat(timespec="seconds"),
@@ -521,6 +546,23 @@ def create_nightly_artifacts(
                 if next_date and not row.get("trade_date", "").strip():
                     row["trade_date"] = next_date
                     changed = True
+                system_managed = (
+                    row.get("rule_ids", "") in SYSTEM_ASSESSMENT_RULE_IDS
+                    and row.get("trigger_type", "") == "nightly_review"
+                    and not row.get("evidence_source_ids", "").strip()
+                    and not row.get("decision_log_path", "").strip()
+                    and not row.get("ticket_id", "").strip()
+                    and row.get("code", "") != "GLOBAL"
+                )
+                if system_managed:
+                    refreshed = _assessment_action_fields(
+                        assessment, row.get("code", "")
+                    )
+                    if any(
+                        row.get(key, "") != value for key, value in refreshed.items()
+                    ):
+                        row.update(refreshed)
+                        changed = True
             if changed:
                 _write_csv(actions_path, rows)
     return {

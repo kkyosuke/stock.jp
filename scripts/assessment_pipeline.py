@@ -290,7 +290,13 @@ def run_assessments(
                 "input_path": raw_path.relative_to(root).as_posix(),
                 "log_recorded": True,
             }
-    except (ValueError, KeyError, MarketRegimeSourceError) as error:
+    except (
+        OSError,
+        ValueError,
+        KeyError,
+        json.JSONDecodeError,
+        MarketRegimeSourceError,
+    ) as error:
         market_status = {
             "status": "UNAVAILABLE",
             "state": "UNAVAILABLE",
@@ -360,10 +366,15 @@ def run_assessments(
     }
     path = run_dir / "assessment-status.json"
     _atomic_json(path, document)
+    assessment_blocker_count = int(market_status["status"] != "CURRENT") + sum(
+        result.get("status") in {"INPUT_REQUIRED", "INCOMPLETE", "STALE", "ERROR"}
+        for result in company_results
+    )
     return {
         "assessment_status": path.relative_to(root).as_posix(),
         "market_regime_status": market_status["status"],
         "market_regime_state": market_status["state"],
         "assessment_target_count": len(company_results),
+        "assessment_blocker_count": assessment_blocker_count,
         "entry_ready_codes": document["entry_ready_codes"],
     }

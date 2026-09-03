@@ -166,6 +166,20 @@ class InvestmentCaseTest(unittest.TestCase):
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("variable-strike securities", result["failures"][0])
 
+    def test_unknown_variable_strike_share_count_is_a_final_failure(self) -> None:
+        case = complete_case()
+        case["capital"]["potential_securities"][0]["variable_strike"] = True
+        case["capital"]["potential_securities"][0]["shares_at_10x_price"] = None
+
+        result = evaluate_investment_case(case)
+
+        self.assertEqual(result["status"], "FAIL")
+        self.assertFalse(result["entry_ready"])
+        self.assertIn(
+            "capital.potential_securities[0].shares_at_10x_price",
+            result["missing_fields"],
+        )
+
     def test_exit_pe_safety_cap_is_enforced(self) -> None:
         case = copy.deepcopy(complete_case())
         case["valuation"]["proposed_exit_pe"] = 41

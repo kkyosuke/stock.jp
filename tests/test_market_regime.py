@@ -67,7 +67,7 @@ class MarketRegimeTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             evaluate_market_regime(inputs(as_of="2026-02-30"))
 
-    def test_breadth_uses_only_codes_with_200_complete_sessions(self) -> None:
+    def test_breadth_excludes_new_listings_without_200_sessions(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
             start = date(2025, 1, 1)
@@ -85,12 +85,76 @@ class MarketRegimeTest(unittest.TestCase):
                     if offset:
                         writer.writerow({"銘柄コード": "NEW", "終値": 100})
 
-            result = calculate_breadth(root, as_of=start + timedelta(days=199))
+            result = calculate_breadth(
+                root,
+                as_of=start + timedelta(days=199),
+                minimum_coverage=0.98,
+            )
 
             self.assertEqual(result.eligible_code_count, 2)
+            self.assertEqual(result.universe_code_count, 2)
+            self.assertEqual(result.latest_code_count, 3)
             self.assertEqual(result.above_ma200_count, 1)
             self.assertEqual(result.breadth_pct, 50)
-            self.assertEqual(result.excluded_code_count, 1)
+            self.assertEqual(result.excluded_code_count, 0)
+            self.assertEqual(result.insufficient_history_code_count, 1)
+            self.assertEqual(result.data_coverage_ratio, 1)
+            self.assertEqual(result.archive_session_count, 200)
+
+    def test_breadth_uses_latest_200_valid_closes_from_lookback(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            start = date(2025, 1, 1)
+            for offset in range(201):
+                day = start + timedelta(days=offset)
+                path = root / str(day.year) / f"{day.isoformat()}.csv"
+                path.parent.mkdir(exist_ok=True)
+                with path.open("w", encoding="utf-8", newline="") as destination:
+                    writer = csv.DictWriter(
+                        destination, fieldnames=["銘柄コード", "終値"]
+                    )
+                    writer.writeheader()
+                    writer.writerow(
+                        {
+                            "銘柄コード": "ONE-GAP",
+                            "終値": "" if offset == 100 else offset + 1,
+                        }
+                    )
+
+            result = calculate_breadth(
+                root,
+                as_of=start + timedelta(days=200),
+                lookback_sessions=201,
+            )
+
+            self.assertEqual(result.eligible_code_count, 1)
+            self.assertEqual(result.data_coverage_ratio, 1)
+            self.assertEqual(result.breadth_pct, 100)
+
+    def test_breadth_rejects_missing_history_for_long_listed_codes(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            start = date(2025, 1, 1)
+            for offset in range(200):
+                day = start + timedelta(days=offset)
+                path = root / str(day.year) / f"{day.isoformat()}.csv"
+                path.parent.mkdir(exist_ok=True)
+                with path.open("w", encoding="utf-8", newline="") as destination:
+                    writer = csv.DictWriter(
+                        destination, fieldnames=["銘柄コード", "終値"]
+                    )
+                    writer.writeheader()
+                    writer.writerow({"銘柄コード": "A", "終値": 100})
+                    writer.writerow({"銘柄コード": "B", "終値": 100})
+                    writer.writerow(
+                        {
+                            "銘柄コード": "BROKEN",
+                            "終値": "" if offset == 100 else 100,
+                        }
+                    )
+
+            with self.assertRaisesRegex(ValueError, "breadth data coverage"):
+                calculate_breadth(root, as_of=start + timedelta(days=199))
 
     def test_raw_series_derives_all_five_components(self) -> None:
         with TemporaryDirectory() as temporary:

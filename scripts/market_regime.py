@@ -40,10 +40,15 @@ class MarketRegimeResult:
 class BreadthResult:
     as_of: str
     breadth_pct: float
+    latest_code_count: int
+    universe_code_count: int
     eligible_code_count: int
     above_ma200_count: int
     excluded_code_count: int
+    insufficient_history_code_count: int
+    data_coverage_ratio: float
     session_count: int
+    archive_session_count: int
 
 
 def _validate(values: MarketRegimeInput) -> None:
@@ -103,9 +108,30 @@ def percentile(values: list[float], percentile_value: float) -> float:
 
 
 def calculate_breadth(
-    archive_root: Path, *, as_of: date, window: int = 200
+    archive_root: Path,
+    *,
+    as_of: date,
+    window: int = 200,
+    lookback_sessions: int = 280,
+    maximum_close_age_days: int = 7,
+    minimum_coverage: float = 0.98,
 ) -> BreadthResult:
-    """Calculate M3 from the tracked point-in-time whole-market archive."""
+    """Calculate M3 from the tracked point-in-time whole-market archive.
+
+    A 200-session moving average uses each security's latest 200 valid closes.
+    Newly listed securities without 200 appearances are outside the eligible
+    universe.  Seasoned securities with too few closes or a stale latest close
+    reduce the coverage ratio and can stop the formal calculation.
+    """
+
+    if window <= 0:
+        raise ValueError("breadth window must be positive")
+    if lookback_sessions < window:
+        raise ValueError("breadth lookback_sessions must be at least window")
+    if maximum_close_age_days < 0:
+        raise ValueError("breadth maximum_close_age_days cannot be negative")
+    if not 0 <= minimum_coverage <= 1:
+        raise ValueError("breadth minimum_coverage must be between 0 and 1")
 
     sessions: list[tuple[date, Path]] = []
     for path in archive_root.glob("*/*.csv"):
@@ -120,15 +146,22 @@ def calculate_breadth(
         raise ValueError(
             f"breadth requires {window} archived sessions; found {len(sessions)}"
         )
-    selected = sessions[-window:]
-    closes: dict[str, list[float]] = {}
+    selected = sessions[-lookback_sessions:]
+    closes: dict[str, list[tuple[date, float]]] = {}
+    appearances: dict[str, int] = {}
     latest_codes: set[str] = set()
-    for index, (_, path) in enumerate(selected):
+    for index, (session_date, path) in enumerate(selected):
+        session_codes: set[str] = set()
         with path.open(encoding="utf-8", newline="") as source:
             for row in csv.DictReader(source):
                 code = str(row.get("銘柄コード", "")).strip()
+                if not code:
+                    continue
+                session_codes.add(code)
+                if index == len(selected) - 1:
+                    latest_codes.add(code)
                 close_text = str(row.get("終値", "")).strip()
-                if not code or not close_text:
+                if not close_text:
                     continue
                 try:
                     close = float(close_text)
@@ -136,24 +169,42 @@ def calculate_breadth(
                     continue
                 if not math.isfinite(close) or close <= 0:
                     continue
-                closes.setdefault(code, []).append(close)
-                if index == len(selected) - 1:
-                    latest_codes.add(code)
+                closes.setdefault(code, []).append((session_date, close))
+        for code in session_codes:
+            appearances[code] = appearances.get(code, 0) + 1
+    latest_session = selected[-1][0]
+    universe = {code for code in latest_codes if appearances.get(code, 0) >= window}
     eligible = {
         code: values
         for code, values in closes.items()
-        if code in latest_codes and len(values) == window
+        if code in universe
+        and len(values) >= window
+        and (latest_session - values[-1][0]).days <= maximum_close_age_days
     }
-    if not eligible:
-        raise ValueError("breadth has no codes with a complete 200-session history")
-    above = sum(values[-1] >= sum(values) / window for values in eligible.values())
+    if not universe or not eligible:
+        raise ValueError("breadth has no seasoned codes with a usable MA history")
+    coverage = len(eligible) / len(universe)
+    if coverage < minimum_coverage:
+        raise ValueError(
+            "breadth data coverage "
+            f"{coverage:.2%} is below required {minimum_coverage:.2%}"
+        )
+    above = sum(
+        values[-1][1] >= sum(close for _, close in values[-window:]) / window
+        for values in eligible.values()
+    )
     return BreadthResult(
-        as_of=selected[-1][0].isoformat(),
+        as_of=latest_session.isoformat(),
         breadth_pct=above / len(eligible) * 100,
+        latest_code_count=len(latest_codes),
+        universe_code_count=len(universe),
         eligible_code_count=len(eligible),
         above_ma200_count=above,
-        excluded_code_count=len(latest_codes - set(eligible)),
+        excluded_code_count=len(universe - set(eligible)),
+        insufficient_history_code_count=len(latest_codes - universe),
+        data_coverage_ratio=coverage,
         session_count=window,
+        archive_session_count=len(selected),
     )
 
 
@@ -218,7 +269,13 @@ def derive_market_regime(
             "ma200": index_values[name][1],
             "observation_count": len(selected),
         }
-    breadth = calculate_breadth(archive_root, as_of=as_of)
+    breadth = calculate_breadth(
+        archive_root,
+        as_of=as_of,
+        lookback_sessions=int(document.get("breadth_lookback_sessions", 280)),
+        maximum_close_age_days=int(document.get("maximum_breadth_close_age_days", 7)),
+        minimum_coverage=float(document.get("minimum_breadth_coverage", 0.98)),
+    )
     if breadth.as_of != as_of.isoformat():
         raise ValueError(
             f"breadth latest session {breadth.as_of} does not match MRS as_of {as_of}"

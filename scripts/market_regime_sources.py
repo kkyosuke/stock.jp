@@ -290,6 +290,11 @@ def collect_market_regime_series(
         "schema_version": "1.0",
         "as_of": as_of.isoformat(),
         "minimum_vi_observations": int(market.get("minimum_vi_observations", 500)),
+        "minimum_breadth_coverage": float(market.get("minimum_breadth_coverage", 0.98)),
+        "breadth_lookback_sessions": int(market.get("breadth_lookback_sessions", 280)),
+        "maximum_breadth_close_age_days": int(
+            market.get("maximum_breadth_close_age_days", 7)
+        ),
         "series": {
             "topix": {
                 "source_url": "|".join(jpx_urls),

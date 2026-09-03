@@ -405,6 +405,16 @@ def evaluate_investment_case(document: dict[str, Any]) -> dict[str, Any]:
                     ),
                 }
                 partial["current_fully_diluted_market_cap"] = price * partial_n0
+        if variable_strike_ids:
+            return _result(
+                "FAIL",
+                document,
+                missing,
+                partial_calculations=partial,
+                failures=[
+                    "variable-strike securities prevent a fixed fully diluted share count"
+                ],
+            )
         return _result("INCOMPLETE", document, missing, partial_calculations=partial)
 
     # All required values are known beyond this point.

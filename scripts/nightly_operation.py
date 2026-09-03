@@ -119,7 +119,11 @@ def start_nightly_run(
         "next_step": (
             "resolve blocking source gaps before making decisions"
             if scan["blocking_gap_count"]
-            else "complete research queue, work plan, report, coverage, and actions"
+            else (
+                "resolve or defer assessment input tasks before making decisions"
+                if assessments["assessment_blocker_count"]
+                else "complete research queue, work plan, report, coverage, and actions"
+            )
         ),
         "broker_submission": "HUMAN_ONLY",
     }

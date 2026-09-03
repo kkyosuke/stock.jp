@@ -6,7 +6,11 @@ import shutil
 from tempfile import TemporaryDirectory
 import unittest
 
-from scripts.nightly_artifacts import next_trading_date, validate_nightly_artifacts
+from scripts.nightly_artifacts import (
+    create_nightly_artifacts,
+    next_trading_date,
+    validate_nightly_artifacts,
+)
 from scripts.nightly_operation import finalize_nightly_run, start_nightly_run
 from scripts.operation_state import PROJECT_ROOT, initialize_or_migrate_workspace
 from scripts.order_ticket import _require_entry_assessment, propose_order
@@ -191,6 +195,70 @@ class NightlyOperationTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "current formal MRS"):
             _require_entry_assessment(run_dir, "1234")
+
+    def test_system_action_refreshes_after_assessment_is_calculated(self) -> None:
+        self._add_holding()
+        started = self._start()
+        run_dir = self.root / str(started["run_dir"])
+        assessment_path = run_dir / "assessment-status.json"
+        assessment = json.loads(assessment_path.read_text(encoding="utf-8"))
+        assessment["market_regime"] = {"status": "CURRENT", "state": "NORMAL"}
+        assessment["companies"] = [
+            {"code": "1234", "status": "PASS", "entry_ready": True}
+        ]
+        assessment_path.write_text(
+            json.dumps(assessment, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+        create_nightly_artifacts(
+            run_id="2026-08-31",
+            at="2026-08-31T18:45:00+09:00",
+            root=self.root,
+        )
+
+        with (run_dir / "next-day-actions.csv").open(
+            encoding="utf-8", newline=""
+        ) as source:
+            action = next(csv.DictReader(source))
+        self.assertEqual(action["next_action"], "WATCH")
+        self.assertEqual(action["rule_ids"], "OPS-ASSESSMENT-PASS")
+
+    def test_reviewed_action_is_not_overwritten_by_assessment_refresh(self) -> None:
+        self._add_holding()
+        started = self._start()
+        run_dir = self.root / str(started["run_dir"])
+        actions_path = run_dir / "next-day-actions.csv"
+        with actions_path.open(encoding="utf-8", newline="") as source:
+            reader = csv.DictReader(source)
+            fields = list(reader.fieldnames or [])
+            actions = list(reader)
+        actions[0]["next_action"] = "KEEP"
+        actions[0]["evidence_source_ids"] = "internal:portfolio-register"
+        with actions_path.open("w", encoding="utf-8", newline="") as destination:
+            writer = csv.DictWriter(destination, fieldnames=fields)
+            writer.writeheader()
+            writer.writerows(actions)
+        assessment_path = run_dir / "assessment-status.json"
+        assessment = json.loads(assessment_path.read_text(encoding="utf-8"))
+        assessment["market_regime"] = {"status": "CURRENT", "state": "NORMAL"}
+        assessment["companies"] = [
+            {"code": "1234", "status": "PASS", "entry_ready": True}
+        ]
+        assessment_path.write_text(
+            json.dumps(assessment, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+        create_nightly_artifacts(
+            run_id="2026-08-31",
+            at="2026-08-31T18:45:00+09:00",
+            root=self.root,
+        )
+
+        with actions_path.open(encoding="utf-8", newline="") as source:
+            action = next(csv.DictReader(source))
+        self.assertEqual(action["next_action"], "KEEP")
 
     def test_cash_equity_calendar_skips_holiday_trading_division(self) -> None:
         run_dir = self.root / "calendar"
