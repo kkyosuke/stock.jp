@@ -9,7 +9,7 @@ import unittest
 from scripts.nightly_artifacts import next_trading_date, validate_nightly_artifacts
 from scripts.nightly_operation import finalize_nightly_run, start_nightly_run
 from scripts.operation_state import PROJECT_ROOT, initialize_or_migrate_workspace
-from scripts.order_ticket import propose_order
+from scripts.order_ticket import _require_entry_assessment, propose_order
 from tests.operation_test_support import write_price_archive
 
 
@@ -144,6 +144,25 @@ class NightlyOperationTest(unittest.TestCase):
             writer.writeheader()
             writer.writerows(actions)
         self._complete_research_queue(run_dir)
+        assessment_path = run_dir / "assessment-status.json"
+        assessment = json.loads(assessment_path.read_text(encoding="utf-8"))
+        assessment["market_regime"] = {
+            "status": "CURRENT",
+            "state": "NORMAL",
+            "entry_multiplier": 1.0,
+        }
+        assessment["companies"] = [
+            {
+                "code": row["code"],
+                "status": "PASS",
+                "entry_ready": True,
+            }
+            for row in assessment.get("companies", [])
+        ]
+        assessment_path.write_text(
+            json.dumps(assessment, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
 
     def test_start_confirms_next_trade_date_and_builds_due_work(self) -> None:
         self._add_holding()
@@ -164,6 +183,14 @@ class NightlyOperationTest(unittest.TestCase):
         self.assertEqual(actions[0]["code"], "1234")
         self.assertEqual(actions[0]["trade_date"], "")
         self.assertEqual(plan["status"], "IN_PROGRESS")
+
+    def test_incomplete_investment_case_blocks_entry_order(self) -> None:
+        self._add_holding()
+        started = self._start()
+        run_dir = self.root / str(started["run_dir"])
+
+        with self.assertRaisesRegex(ValueError, "current formal MRS"):
+            _require_entry_assessment(run_dir, "1234")
 
     def test_cash_equity_calendar_skips_holiday_trading_division(self) -> None:
         run_dir = self.root / "calendar"
@@ -374,10 +401,14 @@ class NightlyOperationTest(unittest.TestCase):
             root=self.root,
             run_id="2026-08-31",
             handoff=json.loads((run_dir / "handoff.json").read_text(encoding="utf-8")),
-            coverage=json.loads((run_dir / "coverage.json").read_text(encoding="utf-8")),
+            coverage=json.loads(
+                (run_dir / "coverage.json").read_text(encoding="utf-8")
+            ),
             orders=[],
         )
-        self.assertTrue(any("requires a matching order ticket" in error for error in errors))
+        self.assertTrue(
+            any("requires a matching order ticket" in error for error in errors)
+        )
 
     def test_honest_uncertainty_text_is_not_treated_as_a_template_marker(self) -> None:
         self._add_holding()
@@ -395,7 +426,9 @@ class NightlyOperationTest(unittest.TestCase):
             root=self.root,
             run_id="2026-08-31",
             handoff=json.loads((run_dir / "handoff.json").read_text(encoding="utf-8")),
-            coverage=json.loads((run_dir / "coverage.json").read_text(encoding="utf-8")),
+            coverage=json.loads(
+                (run_dir / "coverage.json").read_text(encoding="utf-8")
+            ),
             orders=[],
         )
 
@@ -418,7 +451,9 @@ class NightlyOperationTest(unittest.TestCase):
         self.assertEqual(actions[0]["code"], "GLOBAL")
         self.assertEqual(actions[0]["next_action"], "NO-ACTION")
 
-    def test_empty_universe_does_not_repeat_initial_review_after_a_prior_run(self) -> None:
+    def test_empty_universe_does_not_repeat_initial_review_after_a_prior_run(
+        self,
+    ) -> None:
         state_path = self.root / "operations/private/state.json"
         state = json.loads(state_path.read_text(encoding="utf-8"))
         state["last_run_id"] = "2026-08-28"

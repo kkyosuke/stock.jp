@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 from dataclasses import asdict, dataclass
-from datetime import date
+from datetime import date, datetime
+from pathlib import Path
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -33,13 +36,19 @@ class MarketRegimeResult:
     entry_multiplier: float
 
 
+@dataclass(frozen=True)
+class BreadthResult:
+    as_of: str
+    breadth_pct: float
+    eligible_code_count: int
+    above_ma200_count: int
+    excluded_code_count: int
+    session_count: int
+
+
 def _validate(values: MarketRegimeInput) -> None:
     date.fromisoformat(values.as_of)
-    numeric = {
-        key: value
-        for key, value in asdict(values).items()
-        if key != "as_of"
-    }
+    numeric = {key: value for key, value in asdict(values).items() if key != "as_of"}
     for key, value in numeric.items():
         if not math.isfinite(value):
             raise ValueError(f"{key} must be finite")
@@ -75,6 +84,226 @@ def evaluate_market_regime(values: MarketRegimeInput) -> MarketRegimeResult:
         state=state,
         entry_multiplier=multiplier,
     )
+
+
+def percentile(values: list[float], percentile_value: float) -> float:
+    """Return the linearly interpolated percentile used by M4."""
+
+    if not values:
+        raise ValueError("percentile requires at least one value")
+    if not 0 <= percentile_value <= 100:
+        raise ValueError("percentile must be between 0 and 100")
+    ordered = sorted(values)
+    position = (len(ordered) - 1) * percentile_value / 100
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return ordered[lower]
+    return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
+
+
+def calculate_breadth(
+    archive_root: Path, *, as_of: date, window: int = 200
+) -> BreadthResult:
+    """Calculate M3 from the tracked point-in-time whole-market archive."""
+
+    sessions: list[tuple[date, Path]] = []
+    for path in archive_root.glob("*/*.csv"):
+        try:
+            session_date = date.fromisoformat(path.stem)
+        except ValueError:
+            continue
+        if session_date <= as_of:
+            sessions.append((session_date, path))
+    sessions.sort()
+    if len(sessions) < window:
+        raise ValueError(
+            f"breadth requires {window} archived sessions; found {len(sessions)}"
+        )
+    selected = sessions[-window:]
+    closes: dict[str, list[float]] = {}
+    latest_codes: set[str] = set()
+    for index, (_, path) in enumerate(selected):
+        with path.open(encoding="utf-8", newline="") as source:
+            for row in csv.DictReader(source):
+                code = str(row.get("銘柄コード", "")).strip()
+                close_text = str(row.get("終値", "")).strip()
+                if not code or not close_text:
+                    continue
+                try:
+                    close = float(close_text)
+                except ValueError:
+                    continue
+                if not math.isfinite(close) or close <= 0:
+                    continue
+                closes.setdefault(code, []).append(close)
+                if index == len(selected) - 1:
+                    latest_codes.add(code)
+    eligible = {
+        code: values
+        for code, values in closes.items()
+        if code in latest_codes and len(values) == window
+    }
+    if not eligible:
+        raise ValueError("breadth has no codes with a complete 200-session history")
+    above = sum(values[-1] >= sum(values) / window for values in eligible.values())
+    return BreadthResult(
+        as_of=selected[-1][0].isoformat(),
+        breadth_pct=above / len(eligible) * 100,
+        eligible_code_count=len(eligible),
+        above_ma200_count=above,
+        excluded_code_count=len(latest_codes - set(eligible)),
+        session_count=window,
+    )
+
+
+def _points(
+    series: dict[str, Any], *, period: bool = False
+) -> list[tuple[date, float]]:
+    key = "period" if period else "date"
+    result: list[tuple[date, float]] = []
+    for point in series.get("points", []):
+        if not isinstance(point, dict):
+            continue
+        try:
+            point_date = (
+                date.fromisoformat(f"{point[key]}-01")
+                if period
+                else date.fromisoformat(str(point[key]))
+            )
+            value = float(point["value"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if math.isfinite(value) and value > 0:
+            result.append((point_date, value))
+    return sorted(result)
+
+
+def _subtract_months(value: date, months: int) -> tuple[int, int]:
+    month_index = value.year * 12 + value.month - 1 - months
+    return month_index // 12, month_index % 12 + 1
+
+
+def derive_market_regime(
+    document: dict[str, Any], *, archive_root: Path
+) -> tuple[MarketRegimeInput, MarketRegimeResult, dict[str, Any]]:
+    """Derive all nine MRS values from raw point-in-time series."""
+
+    if document.get("schema_version") != "1.0":
+        raise ValueError("market-regime input schema_version must be 1.0")
+    as_of = date.fromisoformat(str(document.get("as_of")))
+    series = document.get("series")
+    if not isinstance(series, dict):
+        raise ValueError("market-regime input requires series")
+    derived: dict[str, Any] = {}
+    index_values: dict[str, tuple[float, float]] = {}
+    for name in ("topix", "growth250"):
+        points = [
+            (day, value) for day, value in _points(series.get(name, {})) if day <= as_of
+        ]
+        if len(points) < 200:
+            raise ValueError(f"{name} requires 200 point-in-time daily observations")
+        selected = points[-200:]
+        if selected[-1][0] != as_of:
+            raise ValueError(
+                f"{name} latest official value {selected[-1][0]} does not match MRS as_of {as_of}"
+            )
+        index_values[name] = (
+            selected[-1][1],
+            sum(value for _, value in selected) / 200,
+        )
+        derived[name] = {
+            "last_date": selected[-1][0].isoformat(),
+            "close": selected[-1][1],
+            "ma200": index_values[name][1],
+            "observation_count": len(selected),
+        }
+    breadth = calculate_breadth(archive_root, as_of=as_of)
+    if breadth.as_of != as_of.isoformat():
+        raise ValueError(
+            f"breadth latest session {breadth.as_of} does not match MRS as_of {as_of}"
+        )
+    derived["breadth"] = asdict(breadth)
+
+    vi_start_year = as_of.year - 3
+    try:
+        vi_start = as_of.replace(year=vi_start_year)
+    except ValueError:
+        vi_start = as_of.replace(year=vi_start_year, day=28)
+    vi_points = [
+        (day, value)
+        for day, value in _points(series.get("nikkei_vi", {}))
+        if vi_start < day <= as_of
+    ]
+    minimum_vi = int(document.get("minimum_vi_observations", 500))
+    if len(vi_points) < minimum_vi:
+        raise ValueError(
+            f"nikkei_vi requires at least {minimum_vi} three-year observations"
+        )
+    vi_latest = vi_points[-1][1]
+    if vi_points[-1][0] != as_of:
+        raise ValueError(
+            f"nikkei_vi latest value {vi_points[-1][0]} does not match MRS as_of {as_of}"
+        )
+    vi_p80 = percentile([value for _, value in vi_points], 80)
+    derived["nikkei_vi"] = {
+        "last_date": vi_points[-1][0].isoformat(),
+        "close": vi_latest,
+        "p80_3y": vi_p80,
+        "observation_count": len(vi_points),
+    }
+
+    leading_series = series.get("leading_ci", {})
+    available_at = (
+        leading_series.get("available_at_jst")
+        if isinstance(leading_series, dict)
+        else None
+    )
+    if not available_at:
+        raise ValueError("leading_ci.available_at_jst is required")
+    available = datetime.fromisoformat(str(available_at).replace("Z", "+00:00"))
+    if available.tzinfo is None:
+        raise ValueError("leading_ci.available_at_jst must include a UTC offset")
+    if available.date() > as_of:
+        raise ValueError("leading CI release was not available by MRS as_of")
+    leading_points = [
+        (period, value)
+        for period, value in _points(leading_series, period=True)
+        if period <= as_of
+    ]
+    if not leading_points:
+        raise ValueError("leading_ci has no value available by MRS as_of")
+    latest_period, latest_ci = leading_points[-1]
+    prior_year, prior_month = _subtract_months(latest_period, 3)
+    prior_matches = [
+        value
+        for period, value in leading_points
+        if (period.year, period.month) == (prior_year, prior_month)
+    ]
+    if not prior_matches:
+        raise ValueError("leading_ci is missing the exact three-month-prior value")
+    prior_ci = prior_matches[-1]
+    derived["leading_ci"] = {
+        "latest_period": latest_period.strftime("%Y-%m"),
+        "latest": latest_ci,
+        "three_month_prior_period": f"{prior_year:04d}-{prior_month:02d}",
+        "three_month_prior": prior_ci,
+        "available_at_jst": available.isoformat(timespec="seconds"),
+    }
+
+    values = MarketRegimeInput(
+        as_of=as_of.isoformat(),
+        topix_close=index_values["topix"][0],
+        topix_ma200=index_values["topix"][1],
+        growth_close=index_values["growth250"][0],
+        growth_ma200=index_values["growth250"][1],
+        breadth_pct=breadth.breadth_pct,
+        nikkei_vi=vi_latest,
+        nikkei_vi_p80_3y=vi_p80,
+        leading_ci=latest_ci,
+        leading_ci_3m_ago=prior_ci,
+    )
+    return values, evaluate_market_regime(values), derived
 
 
 def parse_args() -> argparse.Namespace:

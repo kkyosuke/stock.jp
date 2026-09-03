@@ -60,6 +60,7 @@ class DailyAutomationRunbookTest(unittest.TestCase):
             "next-day-actions-template.csv",
             "watchlist.csv",
             "global-risk-template.md",
+            "investment-case-input-template.json",
         ):
             self.assertTrue((ROOT / "operations/templates" / filename).is_file())
 
