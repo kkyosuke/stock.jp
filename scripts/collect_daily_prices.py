@@ -33,7 +33,7 @@ except ModuleNotFoundError:  # Direct execution from scripts/
 
 JPX_LIST_URL = (
     "https://www.jpx.co.jp/markets/statistics-equities/misc/"
-    "tvdivq0000001vg2-att/data_j.xls"
+    "tvdivq0000001vg2-att/data_j.xlsx"
 )
 YAHOO_HOSTS = ("query1.finance.yahoo.com", "query2.finance.yahoo.com")
 USER_AGENT = "Mozilla/5.0 (compatible; stock.jp daily research/0.1)"
@@ -472,7 +472,7 @@ def main() -> int:
         temporary_dir = None
     else:
         temporary_dir = tempfile.TemporaryDirectory()
-        jpx_path = Path(temporary_dir.name) / "data_j.xls"
+        jpx_path = Path(temporary_dir.name) / "data_j.xlsx"
         _download_file(args.jpx_url, jpx_path, args.timeout)
 
     try:

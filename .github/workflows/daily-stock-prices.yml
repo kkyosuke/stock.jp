@@ -34,7 +34,9 @@ jobs:
           python-version: "3.13"
 
       - name: Install dependencies
-        run: python -m pip install "xlrd==2.0.2" "certifi==2026.7.22" PyYAML
+        run: >-
+          python -m pip install "xlrd==2.0.2" "openpyxl==3.1.5"
+          "certifi==2026.7.22" PyYAML
 
       - name: Collect all current TSE domestic stocks
         env:

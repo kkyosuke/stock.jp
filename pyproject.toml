@@ -5,5 +5,6 @@ description = "Reproducible research utilities for Japanese tenbagger analysis"
 requires-python = ">=3.11"
 dependencies = [
   "certifi==2026.7.22",
+  "openpyxl==3.1.5",
   "xlrd==2.0.2",
 ]

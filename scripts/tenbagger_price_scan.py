@@ -24,6 +24,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from openpyxl import load_workbook
 import xlrd
 
 
@@ -85,24 +86,44 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_issues(path: Path) -> list[Issue]:
-    sheet = xlrd.open_workbook(path).sheet_by_index(0)
+def _issues_from_rows(rows: Iterable[tuple[Any, ...]]) -> list[Issue]:
     issues: list[Issue] = []
-    for row in range(1, sheet.nrows):
-        market = str(sheet.cell_value(row, 3)).strip()
+    for values in rows:
+        if len(values) <= 5:
+            continue
+        market = str(values[3] or "").strip()
         if "内国株式" not in market:
             continue
-        raw_code = sheet.cell_value(row, 1)
+        raw_code = values[1]
         code = str(int(raw_code)) if isinstance(raw_code, float) else str(raw_code).strip()
         issues.append(
             Issue(
                 code=code,
-                name=str(sheet.cell_value(row, 2)).strip(),
+                name=str(values[2] or "").strip(),
                 market=market,
-                sector=str(sheet.cell_value(row, 5)).strip(),
+                sector=str(values[5] or "").strip(),
             )
         )
     return issues
+
+
+def load_issues(path: Path) -> list[Issue]:
+    if path.suffix.lower() == ".xlsx":
+        workbook = load_workbook(path, read_only=True, data_only=True)
+        try:
+            sheet = workbook.worksheets[0]
+            return _issues_from_rows(
+                tuple(values)
+                for values in sheet.iter_rows(min_row=2, values_only=True)
+            )
+        finally:
+            workbook.close()
+
+    sheet = xlrd.open_workbook(path).sheet_by_index(0)
+    return _issues_from_rows(
+        tuple(sheet.cell_value(row, column) for column in range(sheet.ncols))
+        for row in range(1, sheet.nrows)
+    )
 
 
 def unix_start(day: date) -> int:

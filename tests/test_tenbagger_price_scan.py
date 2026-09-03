@@ -1,16 +1,39 @@
 from datetime import date
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
+
+from openpyxl import Workbook
 
 from scripts.tenbagger_price_scan import (
     Price,
     data_quality_flags,
     earliest_episode,
+    load_issues,
     month_ends,
     parse_prices,
 )
 
 
 class TenbaggerPriceScanTest(unittest.TestCase):
+    def test_loads_current_jpx_xlsx_listing_format(self) -> None:
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(("日付", "コード", "銘柄名", "市場・商品区分", "", "33業種区分"))
+        sheet.append((None, 4052, "フィーチャ", "グロース（内国株式）", None, "情報・通信業"))
+        sheet.append((None, 1305, "TOPIX ETF", "ETF・ETN", None, ""))
+
+        with TemporaryDirectory() as temporary:
+            path = Path(temporary) / "data_j.xlsx"
+            workbook.save(path)
+            issues = load_issues(path)
+        workbook.close()
+
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].code, "4052")
+        self.assertEqual(issues[0].name, "フィーチャ")
+        self.assertEqual(issues[0].sector, "情報・通信業")
+
     def test_omits_zero_volume_holiday_placeholders(self) -> None:
         payload = {
             "chart": {
