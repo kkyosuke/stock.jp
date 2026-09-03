@@ -16,7 +16,10 @@ from zoneinfo import ZoneInfo
 try:
     from scripts.nightly_artifacts import ACTION_FIELDS, TRADE_ACTIONS
     from scripts.operation_policy import policy_status
-    from scripts.operation_state import initialize_or_migrate_workspace, secure_private_tree
+    from scripts.operation_state import (
+        initialize_or_migrate_workspace,
+        secure_private_tree,
+    )
     from scripts.position_sizing import validate_purchase_increment
     from scripts.run_integrity import OPEN_TICKET_STATUSES, require_run_lease
 except ModuleNotFoundError:  # Direct execution from scripts/
@@ -71,7 +74,9 @@ def _atomic_csv(path: Path, fields: list[str], rows: list[dict[str, str]]) -> No
     temporary_path.replace(path)
 
 
-def _ticket_id(*, run_id: str, action_id: str, code: str, side: str, trade_date: str) -> str:
+def _ticket_id(
+    *, run_id: str, action_id: str, code: str, side: str, trade_date: str
+) -> str:
     digest = hashlib.sha256(
         f"{run_id}|{action_id}|{code}|{side}|{trade_date}".encode("utf-8")
     ).hexdigest()[:10]
@@ -93,10 +98,39 @@ def _all_open_orders(private: Path) -> list[dict[str, str]]:
     for path in sorted((private / "runs").glob("*/orders.csv")):
         _, rows = _read_csv(path)
         result.extend(
-            row for row in rows
+            row
+            for row in rows
             if row.get("status", "").strip().upper() in OPEN_TICKET_STATUSES
         )
     return result
+
+
+def _require_entry_assessment(run_dir: Path, code: str) -> None:
+    path = run_dir / "assessment-status.json"
+    if not path.is_file():
+        raise ValueError(
+            "BUY/ADD requires assessment-status.json from this nightly run"
+        )
+    assessment = _read_json(path)
+    market = assessment.get("market_regime", {})
+    if not isinstance(market, dict) or market.get("status") != "CURRENT":
+        raise ValueError("BUY/ADD requires a current formal MRS")
+    if market.get("state") not in {"NORMAL", "CAUTION"}:
+        raise ValueError("BUY/ADD requires MRS NORMAL or CAUTION")
+    matches = [
+        item
+        for item in assessment.get("companies", [])
+        if isinstance(item, dict) and str(item.get("code", "")).strip() == code
+    ]
+    if (
+        len(matches) != 1
+        or matches[0].get("status") != "PASS"
+        or matches[0].get("entry_ready") is not True
+    ):
+        status = matches[0].get("status") if matches else "MISSING"
+        raise ValueError(
+            f"BUY/ADD requires a PASS investment assessment; status={status}"
+        )
 
 
 def propose_order(
@@ -160,9 +194,13 @@ def propose_order(
     policy = _read_json(private / "operation-policy.json")
     status = policy_status(policy)
     if not status["valid"]:
-        raise ValueError("invalid operation policy: " + "; ".join(status["validation_errors"]))
+        raise ValueError(
+            "invalid operation policy: " + "; ".join(status["validation_errors"])
+        )
     if status["ticket_status"] == "BLOCKED":
-        detail = ", ".join(status["live_gate_failures"]) or str(status["operation_mode"])
+        detail = ", ".join(status["live_gate_failures"]) or str(
+            status["operation_mode"]
+        )
         raise PermissionError(f"operation policy blocks order tickets: {detail}")
     validate_purchase_increment(
         rule_version=str(policy["active_rule_version"]),
@@ -175,19 +213,24 @@ def propose_order(
     try:
         decision_path.resolve().relative_to(decisions_root)
     except ValueError as error:
-        raise ValueError("decision_id must be a path under operations/private/decisions") from error
+        raise ValueError(
+            "decision_id must be a path under operations/private/decisions"
+        ) from error
     if not decision_path.is_file():
         raise ValueError("decision log must exist before proposing an order")
 
     coverage = _read_json(run_dir / "coverage.json")
     blocking_gaps = [
-        gap for gap in coverage.get("data_gaps", [])
+        gap
+        for gap in coverage.get("data_gaps", [])
         if isinstance(gap, dict)
         and str(gap.get("status", "OPEN")).upper() != "RESOLVED"
         and str(gap.get("severity", "")).upper() in {"CRITICAL", "BLOCKING"}
     ]
     if blocking_gaps:
-        raise ValueError("blocking source gaps must be resolved before proposing an order")
+        raise ValueError(
+            "blocking source gaps must be resolved before proposing an order"
+        )
     handoff_path = run_dir / "handoff.json"
     handoff = _read_json(handoff_path)
     blocking_handoff_gaps = [
@@ -198,16 +241,22 @@ def propose_order(
         and str(gap.get("severity", "")).upper() in {"CRITICAL", "BLOCKING"}
     ]
     if blocking_handoff_gaps:
-        raise ValueError("blocking handoff gaps must be resolved before proposing an order")
+        raise ValueError(
+            "blocking handoff gaps must be resolved before proposing an order"
+        )
     queue = _read_json(run_dir / "research-queue.json")
     unfinished = [
         str(task.get("task_id", "<blank>"))
         for task in queue.get("tasks", [])
-        if isinstance(task, dict)
-        and str(task.get("status", "")).upper() != "COMPLETED"
+        if isinstance(task, dict) and str(task.get("status", "")).upper() != "COMPLETED"
     ]
     if unfinished:
-        raise ValueError("research tasks must be completed before proposing an order: " + ", ".join(unfinished))
+        raise ValueError(
+            "research tasks must be completed before proposing an order: "
+            + ", ".join(unfinished)
+        )
+    if normalized_action in {"BUY", "ADD"}:
+        _require_entry_assessment(run_dir, code)
 
     plan = _read_json(run_dir / "work-plan.json")
     if not plan.get("trading_calendar_confirmed"):
@@ -222,7 +271,10 @@ def propose_order(
     if len(matches) != 1:
         raise ValueError("action_id must identify exactly one next-day action")
     selected = matches[0]
-    if selected.get("code", "").strip() != code or selected.get("next_action", "").strip().upper() != normalized_action:
+    if (
+        selected.get("code", "").strip() != code
+        or selected.get("next_action", "").strip().upper() != normalized_action
+    ):
         raise ValueError("order does not match the selected next-day action")
     if selected.get("trade_date", "").strip() != trade_date:
         raise ValueError("action trade_date does not match")
@@ -240,7 +292,10 @@ def propose_order(
     }
     cited_source_ids = {
         value.strip()
-        for value in selected.get("evidence_source_ids", "").replace("|", ";").replace(",", ";").split(";")
+        for value in selected.get("evidence_source_ids", "")
+        .replace("|", ";")
+        .replace(",", ";")
+        .split(";")
         if value.strip()
     }
     unknown_source_ids = sorted(cited_source_ids - valid_source_ids)
@@ -294,7 +349,9 @@ def propose_order(
             "valid_until_jst": expires.isoformat(timespec="seconds"),
             "participation_cap_pct": participation_text,
             "status": str(status["ticket_status"]),
-            "pretrade_check": "PENDING" if policy["operation_mode"] == "LIVE" else "PAPER_ONLY",
+            "pretrade_check": (
+                "PENDING" if policy["operation_mode"] == "LIVE" else "PAPER_ONLY"
+            ),
             "notes": "proposed by nightly operation; brokerage submission is human-only",
         }
     )
@@ -369,9 +426,22 @@ def parse_args() -> argparse.Namespace:
     commands = parser.add_subparsers(dest="command", required=True)
     propose = commands.add_parser("propose")
     for name in (
-        "run-id", "run-token", "action-id", "code", "company", "side",
-        "action", "rule-ids", "trade-date", "limit-price", "quantity",
-        "position-pct", "valid-until", "participation-cap-pct", "decision-id", "at",
+        "run-id",
+        "run-token",
+        "action-id",
+        "code",
+        "company",
+        "side",
+        "action",
+        "rule-ids",
+        "trade-date",
+        "limit-price",
+        "quantity",
+        "position-pct",
+        "valid-until",
+        "participation-cap-pct",
+        "decision-id",
+        "at",
     ):
         propose.add_argument(f"--{name}", required=True)
     return parser.parse_args()

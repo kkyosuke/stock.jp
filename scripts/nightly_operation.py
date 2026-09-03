@@ -11,6 +11,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 try:
+    from scripts.assessment_pipeline import run_assessments
     from scripts.daily_operation import complete_run, fail_run, prepare_run, read_status
     from scripts.nightly_artifacts import create_nightly_artifacts
     from scripts.official_source_scan import scan_sources
@@ -21,6 +22,7 @@ try:
     )
     from scripts.operation_watchdog import watchdog_status
 except ModuleNotFoundError:  # Direct execution from scripts/
+    from assessment_pipeline import run_assessments
     from daily_operation import complete_run, fail_run, prepare_run, read_status
     from nightly_artifacts import create_nightly_artifacts
     from official_source_scan import scan_sources
@@ -94,6 +96,12 @@ def start_nightly_run(
         fixture_dir=fixture_dir,
         root=root,
     )
+    assessments = run_assessments(
+        run_id=str(prepared["run_id"]),
+        at=at,
+        fixture_dir=fixture_dir,
+        root=root,
+    )
     artifacts = create_nightly_artifacts(
         run_id=str(prepared["run_id"]), at=at, root=root
     )
@@ -106,11 +114,16 @@ def start_nightly_run(
         "source_scan_status": scan["status"],
         "blocking_gap_count": scan["blocking_gap_count"],
         "research_task_count": scan["research_task_count"],
+        **assessments,
         **artifacts,
         "next_step": (
             "resolve blocking source gaps before making decisions"
             if scan["blocking_gap_count"]
-            else "complete research queue, work plan, report, coverage, and actions"
+            else (
+                "resolve or defer assessment input tasks before making decisions"
+                if assessments["assessment_blocker_count"]
+                else "complete research queue, work plan, report, coverage, and actions"
+            )
         ),
         "broker_submission": "HUMAN_ONLY",
     }

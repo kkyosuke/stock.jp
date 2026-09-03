@@ -163,6 +163,12 @@ class OperationStateTest(unittest.TestCase):
                 "minimum_active_target_coverage": 0.5,
                 "maximum_latest_price_age_days": 30,
             },
+            "market_regime": {
+                "minimum_vi_observations": 1,
+                "breadth_lookback_sessions": 200,
+                "maximum_breadth_close_age_days": 30,
+                "minimum_breadth_coverage": 0.5,
+            },
         }
         config_path.write_text(json.dumps(legacy) + "\n", encoding="utf-8")
 
@@ -174,7 +180,7 @@ class OperationStateTest(unittest.TestCase):
             entries = list(csv.DictReader(source))
 
         self.assertIn("operations/private/source-config.json", result["migrated"])
-        self.assertEqual(migrated["schema_version"], "1.1")
+        self.assertEqual(migrated["schema_version"], "1.2")
         self.assertEqual(
             migrated["price_source"]["provider"],
             "yahoo_finance_unofficial_tracked_archive",
@@ -190,8 +196,16 @@ class OperationStateTest(unittest.TestCase):
         self.assertEqual(
             migrated["price_source"]["maximum_latest_price_age_days"], 7
         )
+        self.assertEqual(migrated["market_regime"]["minimum_vi_observations"], 500)
+        self.assertEqual(migrated["market_regime"]["breadth_lookback_sessions"], 280)
+        self.assertEqual(
+            migrated["market_regime"]["maximum_breadth_close_age_days"], 7
+        )
+        self.assertEqual(
+            migrated["market_regime"]["minimum_breadth_coverage"], 0.98
+        )
         self.assertEqual(entries[-1]["from_schema"], "1.0")
-        self.assertEqual(entries[-1]["to_schema"], "1.1")
+        self.assertEqual(entries[-1]["to_schema"], "1.2")
 
     def test_migrates_legacy_migration_log_snapshot_column(self) -> None:
         initialize_or_migrate_workspace(self.root)

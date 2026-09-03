@@ -22,7 +22,7 @@
 
 ~~~bash
 python3 -m venv .venv
-.venv/bin/pip install 'xlrd==2.0.2' 'openpyxl==3.1.5' 'certifi==2026.7.22' PyYAML
+.venv/bin/pip install 'xlrd==2.0.2' 'openpyxl==3.1.5' 'pypdf==6.0.0' 'certifi==2026.7.22' PyYAML
 .venv/bin/python -m unittest discover -s tests -v
 ~~~
 
@@ -42,6 +42,7 @@ python3 -m venv .venv
 - [公開・非公開リポジトリ境界](docs/architecture/repository-boundaries.md)
 - [運用ガバナンス](docs/operations/operation-governance-v0.1.md)
 - [LIVE 運用手順](docs/operations/live-operation-playbook-v0.1.md)
+- [MRS・希薄化・SAM/SOM・10倍経路の自動計算](docs/operations/decision-assessment-automation-v0.1.md)
 - [PAPER/LIVE 準備判定](docs/operations/operation-readiness-v0.1.md)
 - [現行 PAPER ルール v0.4](docs/rules/tenbagger-rule-v0.4.md)
 - [検証用データと再生成方法](data/README.md)

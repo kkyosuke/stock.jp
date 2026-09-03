@@ -32,12 +32,16 @@ ACTION_FIELDS = [
     "decision_log_path",
     "notes",
 ]
-VALID_ACTIONS = {
-    "BUY", "WATCH", "WAIT", "KEEP", "ADD", "REDUCE", "SELL", "NO-ACTION"
-}
+VALID_ACTIONS = {"BUY", "WATCH", "WAIT", "KEEP", "ADD", "REDUCE", "SELL", "NO-ACTION"}
 TRADE_ACTIONS = {"BUY", "ADD", "REDUCE", "SELL"}
 VALID_PRIORITIES = {"CRITICAL", "HIGH", "NORMAL", "LOW"}
 TERMINAL_TASK_STATUSES = {"COMPLETED", "DEFERRED"}
+SYSTEM_ASSESSMENT_RULE_IDS = {
+    "OPS-ASSESSMENT-PASS",
+    "OPS-TENX-FAIL",
+    "OPS-MRS-BLOCK",
+    "OPS-ASSESSMENT-INCOMPLETE",
+}
 
 
 class NightlyArtifactError(ValueError):
@@ -75,7 +79,9 @@ def _read_csv(path: Path) -> tuple[list[str], list[dict[str, str]]]:
 
 def _write_csv(path: Path, rows: list[dict[str, str]]) -> None:
     with path.open("w", encoding="utf-8", newline="") as destination:
-        writer = csv.DictWriter(destination, fieldnames=ACTION_FIELDS, lineterminator="\n")
+        writer = csv.DictWriter(
+            destination, fieldnames=ACTION_FIELDS, lineterminator="\n"
+        )
         writer.writeheader()
         writer.writerows(rows)
 
@@ -91,7 +97,10 @@ def _active_targets(path: Path, *, holding: bool) -> list[dict[str, str]]:
         if not code or status in {"CLOSED", "SOLD", "EXITED", "INACTIVE", "REJECTED"}:
             continue
         if not holding and row.get("active", "").strip().lower() not in {
-            "1", "true", "yes", "active"
+            "1",
+            "true",
+            "yes",
+            "active",
         }:
             continue
         targets.append(
@@ -103,6 +112,56 @@ def _active_targets(path: Path, *, holding: bool) -> list[dict[str, str]]:
             }
         )
     return targets
+
+
+def _assessment_action_fields(assessment: dict[str, Any], code: str) -> dict[str, str]:
+    company_assessment = next(
+        (
+            item
+            for item in assessment.get("companies", [])
+            if isinstance(item, dict) and str(item.get("code", "")) == code
+        ),
+        {},
+    )
+    market = assessment.get("market_regime", {})
+    case_status = str(company_assessment.get("status", "INPUT_REQUIRED"))
+    market_state = str(
+        market.get("state", "UNAVAILABLE")
+        if isinstance(market, dict)
+        else "UNAVAILABLE"
+    )
+    if case_status == "PASS" and market_state in {"NORMAL", "CAUTION"}:
+        return {
+            "next_action": "WATCH",
+            "rule_ids": "OPS-ASSESSMENT-PASS",
+            "trigger_condition": (
+                f"計算合格、MRS={market_state}。人が一次資料と価格を最終確認"
+            ),
+            "human_action": "根拠をレビューし、条件成立時だけBUY/ADD候補へ変更する",
+        }
+    if case_status == "FAIL":
+        failures = "; ".join(
+            str(value) for value in company_assessment.get("failures", [])
+        )
+        return {
+            "next_action": "WAIT",
+            "rule_ids": "OPS-TENX-FAIL",
+            "trigger_condition": failures or "10倍経路が不成立",
+            "human_action": "新しい一次資料が出るまで購入しない",
+        }
+    if market_state in {"STRESS", "UNAVAILABLE"}:
+        return {
+            "next_action": "WAIT",
+            "rule_ids": "OPS-MRS-BLOCK",
+            "trigger_condition": f"MRS={market_state}",
+            "human_action": "正式MRSがNORMALまたはCAUTIONになるまで購入しない",
+        }
+    return {
+        "next_action": "WAIT",
+        "rule_ids": "OPS-ASSESSMENT-INCOMPLETE",
+        "trigger_condition": f"企業評価={case_status}",
+        "human_action": "assessment-status.jsonの不足入力を一次資料から補う",
+    }
 
 
 def next_trading_date(run_dir: Path, after_date: date) -> tuple[str | None, bool]:
@@ -153,11 +212,20 @@ def build_due_tasks(
     pending_review_ids: list[str] | None = None,
     source_rows: list[dict[str, str]] | None = None,
     initial_universe_review_due: bool = False,
+    assessment: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     current = _parse_jst(at)
-    due_at = current.replace(hour=23, minute=59, second=59).isoformat(timespec="seconds")
+    due_at = current.replace(hour=23, minute=59, second=59).isoformat(
+        timespec="seconds"
+    )
     tasks = [
-        _task(f"{run_id}-daily-event", "daily_event", "HIGH", "毎日の開示・即時撤退条件確認", due_at),
+        _task(
+            f"{run_id}-daily-event",
+            "daily_event",
+            "HIGH",
+            "毎日の開示・即時撤退条件確認",
+            due_at,
+        ),
         _task(
             f"{run_id}-global-risk",
             "global_risk",
@@ -176,6 +244,38 @@ def build_due_tasks(
                 due_at,
             )
         )
+    assessment = assessment or {}
+    market = assessment.get("market_regime", {})
+    if isinstance(market, dict) and market.get("status") != "CURRENT":
+        tasks.append(
+            _task(
+                f"{run_id}-market-regime",
+                "market_regime_input",
+                "HIGH",
+                f"正式MRSを確定できない: {market.get('error', '必要系列を確認')}",
+                due_at,
+            )
+        )
+    for company in assessment.get("companies", []):
+        if not isinstance(company, dict) or company.get("status") in {"PASS", "FAIL"}:
+            continue
+        code = str(company.get("code", "")).strip()
+        if not code:
+            continue
+        details = (
+            company.get("missing_fields")
+            or company.get("failures")
+            or [company.get("error", "再評価が必要")]
+        )
+        tasks.append(
+            _task(
+                f"{run_id}-investment-case-{code}",
+                "investment_case",
+                "HIGH",
+                f"{code}の希薄化・SAM/SOM・10倍経路: {'; '.join(str(value) for value in details)}",
+                due_at,
+            )
+        )
     for review_id in pending_review_ids or []:
         if review_id:
             tasks.append(
@@ -188,7 +288,9 @@ def build_due_tasks(
                 )
             )
     if current.weekday() == 4:
-        tasks.append(_task(f"{run_id}-weekly", "weekly", "NORMAL", "金曜の週次確認", due_at))
+        tasks.append(
+            _task(f"{run_id}-weekly", "weekly", "NORMAL", "金曜の週次確認", due_at)
+        )
     if next_trade_date:
         following = date.fromisoformat(next_trade_date)
         if following.month != current.date().month:
@@ -203,7 +305,13 @@ def build_due_tasks(
             )
             if current.month in {3, 6, 9, 12}:
                 tasks.append(
-                    _task(f"{run_id}-quarterly-performance", "quarterly_performance", "NORMAL", "四半期運用成績確認", due_at)
+                    _task(
+                        f"{run_id}-quarterly-performance",
+                        "quarterly_performance",
+                        "NORMAL",
+                        "四半期運用成績確認",
+                        due_at,
+                    )
                 )
     for name, due in policy.get("next_rule_reviews", {}).items():
         if not due:
@@ -214,7 +322,13 @@ def build_due_tasks(
             continue
         if due_date <= current.date():
             tasks.append(
-                _task(f"{run_id}-rule-{name}", "rule_review", "NORMAL", f"ルールレビュー期限: {name}", due_at)
+                _task(
+                    f"{run_id}-rule-{name}",
+                    "rule_review",
+                    "NORMAL",
+                    f"ルールレビュー期限: {name}",
+                    due_at,
+                )
             )
     disclosure_words = ("決算短信", "四半期", "通期", "annual", "quarter")
     for queued in research_queue.get("tasks", []):
@@ -225,7 +339,13 @@ def build_due_tasks(
             task_id = str(queued.get("task_id", "")).strip()
             if task_id:
                 tasks.append(
-                    _task(f"{run_id}-disclosure-{task_id}", "disclosure_review", "HIGH", text.strip(), due_at)
+                    _task(
+                        f"{run_id}-disclosure-{task_id}",
+                        "disclosure_review",
+                        "HIGH",
+                        text.strip(),
+                        due_at,
+                    )
                 )
     for source in source_rows or []:
         title = source.get("title", "")
@@ -234,7 +354,9 @@ def build_due_tasks(
         code = source.get("code", "").strip() or "GLOBAL"
         if not source_id:
             continue
-        if any(word in normalized for word in ("annual", "full-year", "通期", "本決算")):
+        if any(
+            word in normalized for word in ("annual", "full-year", "通期", "本決算")
+        ):
             tasks.append(
                 _task(
                     f"{run_id}-full-year-{code}-{source_id}",
@@ -267,6 +389,8 @@ def create_nightly_artifacts(
     if not run_dir.is_dir():
         raise FileNotFoundError(f"run does not exist: {run_id}")
     next_date, confirmed = next_trading_date(run_dir, date.fromisoformat(run_id))
+    assessment_path = run_dir / "assessment-status.json"
+    assessment = _read_json(assessment_path) if assessment_path.is_file() else {}
     plan_path = run_dir / "work-plan.json"
     if not plan_path.is_file():
         plan = _read_json(root / "operations/templates/work-plan-template.json")
@@ -284,7 +408,10 @@ def create_nightly_artifacts(
             policy=_read_json(root / "operations/private/operation-policy.json"),
             research_queue=_read_json(run_dir / "research-queue.json"),
             pending_review_ids=[
-                str(value) for value in coverage.get("universe", {}).get("due_reviews", {}).get("expected", [])
+                str(value)
+                for value in coverage.get("universe", {})
+                .get("due_reviews", {})
+                .get("expected", [])
             ],
             source_rows=source_rows,
             initial_universe_review_due=(
@@ -294,6 +421,7 @@ def create_nightly_artifacts(
                     for name in ("holdings", "watchlist")
                 )
             ),
+            assessment=assessment,
         )
         _atomic_json(plan_path, plan)
     else:
@@ -314,7 +442,10 @@ def create_nightly_artifacts(
                 policy=_read_json(root / "operations/private/operation-policy.json"),
                 research_queue=_read_json(run_dir / "research-queue.json"),
                 pending_review_ids=[
-                    str(value) for value in coverage.get("universe", {}).get("due_reviews", {}).get("expected", [])
+                    str(value)
+                    for value in coverage.get("universe", {})
+                    .get("due_reviews", {})
+                    .get("expected", [])
                 ],
                 source_rows=source_rows,
                 initial_universe_review_due=(
@@ -324,8 +455,11 @@ def create_nightly_artifacts(
                         for name in ("holdings", "watchlist")
                     )
                 ),
+                assessment=assessment,
             )
-            plan["generated_at_jst"] = plan.get("generated_at_jst") or _parse_jst(at).isoformat(timespec="seconds")
+            plan["generated_at_jst"] = plan.get("generated_at_jst") or _parse_jst(
+                at
+            ).isoformat(timespec="seconds")
             plan["next_trading_date"] = next_date
             plan["trading_calendar_confirmed"] = confirmed
             plan["tasks"] = [
@@ -335,7 +469,9 @@ def create_nightly_artifacts(
 
     research_path = run_dir / "research-results.md"
     if not research_path.is_file():
-        text = (root / "operations/templates/research-results-template.md").read_text(encoding="utf-8")
+        text = (root / "operations/templates/research-results-template.md").read_text(
+            encoding="utf-8"
+        )
         research_path.write_text(text.replace("{{RUN_ID}}", run_id), encoding="utf-8")
 
     global_risk_path = run_dir / "global-risk.md"
@@ -359,6 +495,7 @@ def create_nightly_artifacts(
             if code in seen:
                 continue
             seen.add(code)
+            assessment_fields = _assessment_action_fields(assessment, code)
             rows.append(
                 {
                     **dict.fromkeys(ACTION_FIELDS, ""),
@@ -368,11 +505,14 @@ def create_nightly_artifacts(
                     "code": code,
                     "company": target["company"],
                     "current_status": target["current_status"],
-                    "next_action": "WAIT",
+                    "next_action": assessment_fields["next_action"],
+                    "rule_ids": assessment_fields["rule_ids"],
                     "trigger_type": "nightly_review",
-                    "trigger_condition": "一次資料による判定待ち",
-                    "human_action": "エージェントが根拠とルールIDを確定する",
-                    "review_by_jst": _parse_jst(at).replace(hour=23, minute=59, second=59).isoformat(timespec="seconds"),
+                    "trigger_condition": assessment_fields["trigger_condition"],
+                    "human_action": assessment_fields["human_action"],
+                    "review_by_jst": _parse_jst(at)
+                    .replace(hour=23, minute=59, second=59)
+                    .isoformat(timespec="seconds"),
                     "notes": target["target_type"],
                 }
             )
@@ -391,7 +531,9 @@ def create_nightly_artifacts(
                     "trigger_type": "nightly_review",
                     "trigger_condition": "保有・監視対象なし",
                     "human_action": "なし",
-                    "review_by_jst": _parse_jst(at).replace(hour=23, minute=59, second=59).isoformat(timespec="seconds"),
+                    "review_by_jst": _parse_jst(at)
+                    .replace(hour=23, minute=59, second=59)
+                    .isoformat(timespec="seconds"),
                     "evidence_source_ids": "internal:portfolio-register;internal:watchlist",
                 }
             )
@@ -404,6 +546,23 @@ def create_nightly_artifacts(
                 if next_date and not row.get("trade_date", "").strip():
                     row["trade_date"] = next_date
                     changed = True
+                system_managed = (
+                    row.get("rule_ids", "") in SYSTEM_ASSESSMENT_RULE_IDS
+                    and row.get("trigger_type", "") == "nightly_review"
+                    and not row.get("evidence_source_ids", "").strip()
+                    and not row.get("decision_log_path", "").strip()
+                    and not row.get("ticket_id", "").strip()
+                    and row.get("code", "") != "GLOBAL"
+                )
+                if system_managed:
+                    refreshed = _assessment_action_fields(
+                        assessment, row.get("code", "")
+                    )
+                    if any(
+                        row.get(key, "") != value for key, value in refreshed.items()
+                    ):
+                        row.update(refreshed)
+                        changed = True
             if changed:
                 _write_csv(actions_path, rows)
     return {
@@ -429,7 +588,8 @@ def validate_nightly_artifacts(
     errors: list[str] = []
     _, source_rows = _read_csv(run_dir / "sources.csv")
     valid_evidence_ids = {
-        row.get("source_id", "").strip() for row in source_rows
+        row.get("source_id", "").strip()
+        for row in source_rows
         if row.get("source_id", "").strip()
     } | {"internal:portfolio-register", "internal:watchlist"}
 
@@ -440,11 +600,7 @@ def validate_nightly_artifacts(
         return [item.strip() for item in text.split(";") if item.strip()]
 
     def unknown_evidence(values: list[str]) -> list[str]:
-        return sorted(
-            value
-            for value in set(values)
-            if value not in valid_evidence_ids
-        )
+        return sorted(value for value in set(values) if value not in valid_evidence_ids)
 
     plan = _read_json(run_dir / "work-plan.json")
     if plan.get("run_id") != run_id or not plan.get("generated_at_jst"):
@@ -471,7 +627,9 @@ def validate_nightly_artifacts(
         if status not in TERMINAL_TASK_STATUSES:
             errors.append(f"work-plan task is not terminal: {task_id or '<blank>'}")
         if status == "COMPLETED" and not task.get("evidence_source_ids"):
-            errors.append(f"completed work-plan task lacks evidence: {task_id or '<blank>'}")
+            errors.append(
+                f"completed work-plan task lacks evidence: {task_id or '<blank>'}"
+            )
         if status == "COMPLETED":
             task_evidence = evidence_ids(task.get("evidence_source_ids"))
             unknown = unknown_evidence(task_evidence)
@@ -480,7 +638,9 @@ def validate_nightly_artifacts(
                     f"work-plan task {task_id or '<blank>'} cites unknown evidence: {', '.join(unknown)}"
                 )
         if status == "DEFERRED" and task_id not in pending_reviews:
-            errors.append(f"deferred work-plan task missing from handoff: {task_id or '<blank>'}")
+            errors.append(
+                f"deferred work-plan task missing from handoff: {task_id or '<blank>'}"
+            )
     duplicate_tasks = sorted(
         {value for value in task_ids if value and task_ids.count(value) > 1}
     )
@@ -518,8 +678,12 @@ def validate_nightly_artifacts(
         return errors + ["next-day-actions.csv requires at least one action"]
     ids: list[str] = []
     action_by_ticket: dict[str, dict[str, str]] = {}
-    target_codes = set(map(str, coverage.get("universe", {}).get("holdings", {}).get("expected", [])))
-    target_codes |= set(map(str, coverage.get("universe", {}).get("watchlist", {}).get("expected", [])))
+    target_codes = set(
+        map(str, coverage.get("universe", {}).get("holdings", {}).get("expected", []))
+    )
+    target_codes |= set(
+        map(str, coverage.get("universe", {}).get("watchlist", {}).get("expected", []))
+    )
     action_codes: set[str] = set()
     order_by_ticket = {row.get("ticket_id", "").strip(): row for row in orders}
     for row in actions:
@@ -537,7 +701,9 @@ def validate_nightly_artifacts(
         if not row.get("rule_ids", "").strip():
             errors.append(f"action {action_id or '<blank>'} requires rule_ids")
         if not row.get("evidence_source_ids", "").strip():
-            errors.append(f"action {action_id or '<blank>'} requires evidence_source_ids")
+            errors.append(
+                f"action {action_id or '<blank>'} requires evidence_source_ids"
+            )
         unknown = unknown_evidence(evidence_ids(row.get("evidence_source_ids")))
         if unknown:
             errors.append(
@@ -545,12 +711,20 @@ def validate_nightly_artifacts(
             )
         if action in TRADE_ACTIONS:
             ticket_id = row.get("ticket_id", "").strip()
-            if not plan.get("trading_calendar_confirmed") or not plan.get("next_trading_date"):
-                errors.append(f"trade action {action_id} requires a confirmed trading date")
-            if row.get("trade_date", "").strip() != str(plan.get("next_trading_date") or ""):
+            if not plan.get("trading_calendar_confirmed") or not plan.get(
+                "next_trading_date"
+            ):
+                errors.append(
+                    f"trade action {action_id} requires a confirmed trading date"
+                )
+            if row.get("trade_date", "").strip() != str(
+                plan.get("next_trading_date") or ""
+            ):
                 errors.append(f"trade action {action_id} trade_date mismatch")
             if not ticket_id or ticket_id not in order_by_ticket:
-                errors.append(f"trade action {action_id} requires a matching order ticket")
+                errors.append(
+                    f"trade action {action_id} requires a matching order ticket"
+                )
             else:
                 order = order_by_ticket[ticket_id]
                 expected_side = "BUY" if action in {"BUY", "ADD"} else "SELL"
@@ -570,18 +744,24 @@ def validate_nightly_artifacts(
                     == row.get("decision_log_path", "").strip(),
                 )
                 if not all(matching_fields):
-                    errors.append(f"trade action {action_id} does not match order {ticket_id}")
+                    errors.append(
+                        f"trade action {action_id} does not match order {ticket_id}"
+                    )
                 action_by_ticket[ticket_id] = row
     duplicates = sorted({value for value in ids if value and ids.count(value) > 1})
     if duplicates:
         errors.append(f"duplicate action_id: {', '.join(duplicates)}")
     missing_targets = sorted(target_codes - action_codes)
     if missing_targets:
-        errors.append(f"next-day actions missing target codes: {', '.join(missing_targets)}")
+        errors.append(
+            f"next-day actions missing target codes: {', '.join(missing_targets)}"
+        )
     if not target_codes and "GLOBAL" not in action_codes:
         errors.append("empty universe requires a GLOBAL action")
     for order in orders:
         ticket_id = order.get("ticket_id", "").strip()
         if ticket_id not in action_by_ticket:
-            errors.append(f"order ticket has no matching trade action: {ticket_id or '<blank>'}")
+            errors.append(
+                f"order ticket has no matching trade action: {ticket_id or '<blank>'}"
+            )
     return errors

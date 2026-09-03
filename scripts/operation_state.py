@@ -116,7 +116,7 @@ def _normalized_source_config(
     config: dict[str, Any], template: dict[str, Any]
 ) -> dict[str, Any]:
     version = str(config.get("schema_version", ""))
-    if version not in {"1.0", "1.1"}:
+    if version not in {"1.0", "1.1", "1.2"}:
         raise ValueError(f"unsupported source config schema: {version!r}")
     normalized = {**template, **config}
     configured_price = config.get("price_source", {})
@@ -124,8 +124,7 @@ def _normalized_source_config(
         configured_price = {}
     template_price = template.get("price_source", {})
     normalized["price_source"] = {
-        key: configured_price.get(key, value)
-        for key, value in template_price.items()
+        key: configured_price.get(key, value) for key, value in template_price.items()
     }
     # The tracked Git archive replaces the legacy direct Yahoo collector. Its
     # identity and path are canonical; old URL, range, batch and universe
@@ -151,17 +150,46 @@ def _normalized_source_config(
             )
         ),
     )
-    for section in ("edinet", "manual_primary_sources"):
+    for section in ("edinet", "market_regime", "manual_primary_sources"):
         configured_section = config.get(section, {})
         normalized[section] = {
             **template.get(section, {}),
             **(configured_section if isinstance(configured_section, dict) else {}),
         }
+    template_market = template.get("market_regime", {})
+    configured_market = (
+        config.get("market_regime", {})
+        if isinstance(config.get("market_regime"), dict)
+        else {}
+    )
+    for field in ("minimum_vi_observations", "breadth_lookback_sessions"):
+        normalized["market_regime"][field] = max(
+            int(template_market[field]),
+            int(configured_market.get(field, template_market[field])),
+        )
+    normalized["market_regime"]["minimum_breadth_coverage"] = max(
+        float(template_market["minimum_breadth_coverage"]),
+        float(
+            configured_market.get(
+                "minimum_breadth_coverage",
+                template_market["minimum_breadth_coverage"],
+            )
+        ),
+    )
+    normalized["market_regime"]["maximum_breadth_close_age_days"] = min(
+        int(template_market["maximum_breadth_close_age_days"]),
+        int(
+            configured_market.get(
+                "maximum_breadth_close_age_days",
+                template_market["maximum_breadth_close_age_days"],
+            )
+        ),
+    )
     normalized["initial_lookback_days"] = max(
         int(template.get("initial_lookback_days", 7)),
         int(config.get("initial_lookback_days", 0)),
     )
-    normalized["schema_version"] = "1.1"
+    normalized["schema_version"] = "1.2"
     normalized.pop("jquants", None)
     return normalized
 
@@ -218,7 +246,10 @@ def _migrate_csv(path: Path, template_path: Path) -> None:
         "w", encoding="utf-8", newline="", dir=path.parent, delete=False
     ) as temporary:
         writer = csv.DictWriter(
-            temporary, fieldnames=target_fields, extrasaction="ignore", lineterminator="\n"
+            temporary,
+            fieldnames=target_fields,
+            extrasaction="ignore",
+            lineterminator="\n",
         )
         writer.writeheader()
         writer.writerows(rows)
@@ -312,6 +343,12 @@ def initialize_or_migrate_workspace(
     private.mkdir(parents=True, exist_ok=True, mode=0o700)
     (private / "runs").mkdir(exist_ok=True, mode=0o700)
     (private / "decisions").mkdir(exist_ok=True, mode=0o700)
+    (private / "research-inputs" / "market-regime").mkdir(
+        parents=True, exist_ok=True, mode=0o700
+    )
+    (private / "research-inputs" / "investment-cases").mkdir(
+        parents=True, exist_ok=True, mode=0o700
+    )
 
     planned = _planned_migrations(root)
     migrated_at = datetime.now(JST)
@@ -511,9 +548,7 @@ def main() -> int:
         result = {
             "schema_version": state.get("schema_version"),
             "state_revision": state.get("state_revision"),
-            "unreconciled_ticket_count": len(
-                state.get("unreconciled_ticket_ids", [])
-            ),
+            "unreconciled_ticket_count": len(state.get("unreconciled_ticket_ids", [])),
             "validation_errors": validate_workspace(),
         }
     print(json.dumps(result, ensure_ascii=False, indent=2))
