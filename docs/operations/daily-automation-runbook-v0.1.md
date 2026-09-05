@@ -114,7 +114,7 @@ $japan-stock-operator を使って、今日の夜間運用を最後まで実行�
 1. マージ済みYahoo全市場日足の母集団coverage・active対象100%・鮮度・checksumを`operation_bootstrap.py check`で検証し、blockerがあれば開始しない
 2. `operation-policy.json`、`state.json`、保有、取引・資金台帳、再購入禁止、監視、未処理注文、前回引き継ぎを読み、`operation_state.py validate`を通す
 3. 今回のJST情報カットオフを宣言する
-4. `nightly_operation.py start`を実行し、返された`run_token`を保持する。開始処理もreadinessを再検証し、同日の実行が`locked`なら別実行を開始しない。公式情報源はTDnet、EDINET、決算サマリーを差分取得し、APIキーがないPAPERでは会社IR、TDnet/JPX、EDINETをWebで確認して根拠を保存する
+4. `nightly_operation.py start`を実行し、返された`run_token`を保持する。開始処理もreadinessを再検証し、同日の実行が`locked`なら別実行を開始しない。認証不要のJPX銘柄一覧を毎回保存し、`JQUANTS_API_KEY`があれば公式日足・20営業日流動性・決算サマリー/予想履歴・株式数・決算予定変更・営業日をprivateへ保存する。キーがないPAPERでは従来どおり会社IR、TDnet/JPX、EDINETをWebで確認して根拠を保存する
 5. `global-risk.md`へ為替、金利、資源、主要国政策、地政学を「事実→保有KPIへの伝播→判断」に分けて保存する
 6. `S-A`を最優先し、注文候補に新情報があれば `WAIT` または取消候補にする
 7. 期限到来キューだけ週次・月次・四半期・本決算レビューする。月次は毎日蓄積済みの全市場日足と最新JPX一覧から候補集合を見直し、同じYahooデータを再取得しない

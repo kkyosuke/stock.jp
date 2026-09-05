@@ -181,11 +181,11 @@ class NightlyOperationTest(unittest.TestCase):
         self.assertEqual(result["source_scan_status"], "PARTIAL")
         self.assertTrue(result["paper_go"])
         self.assertFalse(result["live_go"])
-        self.assertFalse(result["trading_calendar_confirmed"])
-        self.assertIsNone(result["next_trading_date"])
+        self.assertTrue(result["trading_calendar_confirmed"])
+        self.assertEqual(result["next_trading_date"], "2026-09-01")
         self.assertIn("2026-08-31-daily-event", result["due_task_ids"])
         self.assertEqual(actions[0]["code"], "1234")
-        self.assertEqual(actions[0]["trade_date"], "")
+        self.assertEqual(actions[0]["trade_date"], "2026-09-01")
         self.assertEqual(plan["status"], "IN_PROGRESS")
 
     def test_incomplete_investment_case_blocks_entry_order(self) -> None:

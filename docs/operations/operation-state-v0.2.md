@@ -21,6 +21,9 @@
 | `recovered-capital-ledger.csv` | 5倍・10倍等の売却資金と再配分の有無 | 回収と割当を別イベントとして追跡 |
 | `capital-ledger.csv` | 入出金、売買、費用、税、利用可能現金 | 1資金イベント1行で追記 |
 | `corporate-actions.csv` | 分割、併合、コード変更等と正規化係数 | 適用前後と根拠URLを残す |
+| `forecast-history.csv` | J-Quants決算サマリーに含まれる会社予想の公表時点履歴 | `source_id`で重複排除し、後日の値で過去値を上書きしない |
+| `share-count-history.csv` | 決算サマリー記載の期末発行済・自己株・平均株式数 | リアルタイム株式数とみなさず、希薄化確認の起点にする |
+| `earnings-calendar-history.csv` | 決算発表予定の公表・変更・未定化履歴 | 旧予定を削除せず公表日順に残す |
 | `rebuy-restrictions.csv` | 63営業日または恒久的な再購入禁止 | 全売却イベントから作成し、解除理由を残す |
 | `industry-exposure.csv` | 適用ルール版の同一業種上限（v0.4は20%）の時点別集計 | 注文候補作成前と約定後に更新 |
 | `market-regime-log.csv` | `MRS-v0.1`の時点別入力と結果 | 後日の改定値で過去行を上書きしない |

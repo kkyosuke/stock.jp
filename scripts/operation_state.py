@@ -33,6 +33,9 @@ TEMPLATE_TO_PRIVATE = {
     "recovered-capital-ledger.csv": "recovered-capital-ledger.csv",
     "capital-ledger.csv": "capital-ledger.csv",
     "corporate-actions.csv": "corporate-actions.csv",
+    "forecast-history.csv": "forecast-history.csv",
+    "share-count-history.csv": "share-count-history.csv",
+    "earnings-calendar-history.csv": "earnings-calendar-history.csv",
     "rebuy-restrictions.csv": "rebuy-restrictions.csv",
     "industry-exposure.csv": "industry-exposure.csv",
     "schema-migration-log.csv": "schema-migration-log.csv",
@@ -51,6 +54,9 @@ LEDGER_IDS = {
     "recovered-capital-ledger.csv": "recovery_id",
     "capital-ledger.csv": "event_id",
     "corporate-actions.csv": "action_id",
+    "forecast-history.csv": "source_id",
+    "share-count-history.csv": "source_id",
+    "earnings-calendar-history.csv": "source_id",
     "rebuy-restrictions.csv": "restriction_id",
 }
 
@@ -116,7 +122,7 @@ def _normalized_source_config(
     config: dict[str, Any], template: dict[str, Any]
 ) -> dict[str, Any]:
     version = str(config.get("schema_version", ""))
-    if version not in {"1.0", "1.1", "1.2"}:
+    if version not in {"1.0", "1.1", "1.2", "1.3"}:
         raise ValueError(f"unsupported source config schema: {version!r}")
     normalized = {**template, **config}
     configured_price = config.get("price_source", {})
@@ -150,7 +156,13 @@ def _normalized_source_config(
             )
         ),
     )
-    for section in ("edinet", "market_regime", "manual_primary_sources"):
+    for section in (
+        "edinet",
+        "jpx_listed_master",
+        "jquants",
+        "market_regime",
+        "manual_primary_sources",
+    ):
         configured_section = config.get(section, {})
         normalized[section] = {
             **template.get(section, {}),
@@ -189,8 +201,18 @@ def _normalized_source_config(
         int(template.get("initial_lookback_days", 7)),
         int(config.get("initial_lookback_days", 0)),
     )
-    normalized["schema_version"] = "1.2"
-    normalized.pop("jquants", None)
+    normalized["jpx_listed_master"]["url"] = template["jpx_listed_master"]["url"]
+    normalized["jpx_listed_master"]["minimum_issue_count"] = max(
+        int(template["jpx_listed_master"]["minimum_issue_count"]),
+        int(
+            normalized["jpx_listed_master"].get(
+                "minimum_issue_count",
+                template["jpx_listed_master"]["minimum_issue_count"],
+            )
+        ),
+    )
+    normalized["jquants"]["base_url"] = template["jquants"]["base_url"]
+    normalized["schema_version"] = "1.3"
     return normalized
 
 
