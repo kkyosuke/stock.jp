@@ -7,6 +7,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/daily-stock-prices.yml"
+OPERATION_TEST_WORKFLOW = ROOT / ".github/workflows/operation-tests.yml"
 
 
 class DailyStockPriceWorkflowTest(unittest.TestCase):
@@ -61,6 +62,24 @@ class DailyStockPriceWorkflowTest(unittest.TestCase):
             install_start,
         )
         install_step = self.text[install_start:collect_start]
+
+        for dependency in project_dependencies:
+            with self.subTest(dependency=dependency):
+                self.assertIn(dependency, install_step)
+
+    def test_operation_tests_install_every_project_runtime_dependency(self) -> None:
+        operation_test_text = OPERATION_TEST_WORKFLOW.read_text(encoding="utf-8")
+        with (ROOT / "pyproject.toml").open("rb") as source:
+            project_dependencies = tomllib.load(source)["project"]["dependencies"]
+
+        install_start = operation_test_text.index(
+            "- name: Install runtime and skill-validator dependencies"
+        )
+        unit_test_start = operation_test_text.index(
+            "- name: Unit tests",
+            install_start,
+        )
+        install_step = operation_test_text[install_start:unit_test_start]
 
         for dependency in project_dependencies:
             with self.subTest(dependency=dependency):
