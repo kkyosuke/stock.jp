@@ -119,11 +119,11 @@ stock.jp/.venv/bin/python stock.jp/scripts/live_gate_evidence.py \
 
 再生結果はholdoutの事前宣言、閾値凍結日時、再調整0回を持ち、v0.2/v0.4双方のreturn、maximum drawdown、1銘柄・業種の最大損失寄与を含める。本人はv0.4の資金配分による損失増幅と、戦略待機資金が安全資産でないことを確認する。
 
-review は再生結果、履歴再生受入証跡、12か月PAPER証跡のSHA-256へ拘束する。いずれかを更新すると再承認が必要になる。判定は成績が正なら自動昇格するものではなく、本人が `PROMOTE_V0_4_TO_LIVE` を明示した場合だけ合格する。
+review は再生結果と履歴再生受入証跡のSHA-256へ拘束する。いずれかを更新すると再承認が必要になる。PAPER期間証跡は任意diagnosticであり、この昇格の入力にはしない。判定は成績が正なら自動昇格するものではなく、本人が `PROMOTE_V0_4_TO_LIVE` を明示した場合だけ合格する。
 
 ## 最終 LIVE 昇格
 
-各コマンドの合格結果を上記の既定 evidence path へ `--write-evidence` で保存する。最後に `live-approval-template.json` を `operations/private/evidence/live-approval.json` へコピーし、private/public commit、現在のPAPER policy、8証跡のSHA-256、本人の `LIVE` 判断を記入する。
+各コマンドの合格結果を上記の既定 evidence path へ `--write-evidence` で保存する。最後に `live-approval-template.json` を `operations/private/evidence/live-approval.json` へコピーし、private/public commit、現在のPAPER policy、6証跡のSHA-256、本人の `LIVE` 判断を記入する。
 
 まず変更を加えない判定を実行する。
 
