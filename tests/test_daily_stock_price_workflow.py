@@ -85,6 +85,15 @@ class DailyStockPriceWorkflowTest(unittest.TestCase):
             with self.subTest(dependency=dependency):
                 self.assertIn(dependency, install_step)
 
+    def test_readme_installs_every_project_runtime_dependency(self) -> None:
+        readme_text = (ROOT / "README.md").read_text(encoding="utf-8")
+        with (ROOT / "pyproject.toml").open("rb") as source:
+            project_dependencies = tomllib.load(source)["project"]["dependencies"]
+
+        for dependency in project_dependencies:
+            with self.subTest(dependency=dependency):
+                self.assertIn(dependency, readme_text)
+
 
 if __name__ == "__main__":
     unittest.main()
