@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import tomllib
 import unittest
 
 
@@ -49,6 +50,21 @@ class DailyStockPriceWorkflowTest(unittest.TestCase):
         self.assertIn("contents: write", self.text)
         self.assertIn("pull-requests: write", self.text)
         self.assertNotIn("id-token: write", self.text)
+
+    def test_workflow_installs_every_project_runtime_dependency(self) -> None:
+        with (ROOT / "pyproject.toml").open("rb") as source:
+            project_dependencies = tomllib.load(source)["project"]["dependencies"]
+
+        install_start = self.text.index("- name: Install dependencies")
+        collect_start = self.text.index(
+            "- name: Collect all current TSE domestic stocks",
+            install_start,
+        )
+        install_step = self.text[install_start:collect_start]
+
+        for dependency in project_dependencies:
+            with self.subTest(dependency=dependency):
+                self.assertIn(dependency, install_step)
 
 
 if __name__ == "__main__":
