@@ -74,6 +74,15 @@ class OfficialSourceScanTest(unittest.TestCase):
         self.assertEqual(
             health["providers"]["yahoo_tracked_archive"]["status"], "OK"
         )
+        self.assertEqual(health["providers"]["jpx_listed_master"]["status"], "OK")
+        self.assertEqual(health["providers"]["jquants_market_data"]["status"], "OK")
+        self.assertEqual(health["providers"]["jquants_financials"]["status"], "OK")
+        self.assertEqual(
+            health["providers"]["jquants_earnings_calendar"]["status"], "OK"
+        )
+        self.assertEqual(
+            health["providers"]["jquants_trading_calendar"]["status"], "OK"
+        )
         self.assertEqual(
             health["providers"]["first_party_public_checks"]["status"], "PENDING"
         )
@@ -89,10 +98,37 @@ class OfficialSourceScanTest(unittest.TestCase):
             "manual-tdnet-2026-08-31",
             {task["task_id"] for task in queue["tasks"]},
         )
+        self.assertNotIn(
+            "manual-official_market_data-2026-08-31",
+            {task["task_id"] for task in queue["tasks"]},
+        )
+        self.assertNotIn(
+            "manual-trading_calendar-2026-08-31",
+            {task["task_id"] for task in queue["tasks"]},
+        )
         self.assertTrue((run_dir / "raw-sources/edinet-2026-08-31.json").is_file())
+        self.assertTrue((run_dir / "reference-data/manifest.json").is_file())
+        self.assertTrue((run_dir / "reference-data/liquidity-20d.csv").is_file())
+        self.assertTrue((run_dir / "trading-calendar.json").is_file())
+        self.assertGreater(
+            (self.root / "operations/private/forecast-history.csv").stat().st_size,
+            len("source_id\n"),
+        )
+        self.assertGreater(
+            (self.root / "operations/private/share-count-history.csv").stat().st_size,
+            len("source_id\n"),
+        )
+        self.assertGreater(
+            (self.root / "operations/private/earnings-calendar-history.csv").stat().st_size,
+            len("source_id\n"),
+        )
 
     def test_missing_credentials_create_blocking_gaps_without_network(self) -> None:
         prepared = self._prepare()
+        config_path = self.root / "operations/private/source-config.json"
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        config["jpx_listed_master"]["enabled"] = False
+        config_path.write_text(json.dumps(config) + "\n", encoding="utf-8")
         result = scan_sources(
             run_id="2026-08-31",
             run_token=str(prepared["run_token"]),
@@ -183,7 +219,7 @@ class OfficialSourceScanTest(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "PARTIAL")
-        self.assertEqual(result["blocking_gap_count"], 4)
+        self.assertEqual(result["blocking_gap_count"], 2)
 
     def test_agent_can_close_fixture_run_after_manual_primary_checks(self) -> None:
         prepared = self._prepare()

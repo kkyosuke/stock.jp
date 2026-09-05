@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 import certifi
 
 try:
+    from scripts.non_edinet_sources import collect_non_edinet_sources
     from scripts.operation_state import (
         initialize_or_migrate_workspace,
         secure_private_tree,
@@ -29,6 +30,7 @@ try:
     from scripts.price_snapshot import validate_tracked_price_snapshot
     from scripts.run_integrity import SOURCE_FIELDS, require_run_lease
 except ModuleNotFoundError:  # Direct execution from scripts/
+    from non_edinet_sources import collect_non_edinet_sources
     from operation_state import initialize_or_migrate_workspace, secure_private_tree
     from price_snapshot import validate_tracked_price_snapshot
     from run_integrity import SOURCE_FIELDS, require_run_lease
@@ -70,7 +72,13 @@ def _source_config(root: Path, private: Path) -> dict[str, Any]:
     template = _read_json(root / "operations/templates/source-config-template.json")
     configured = _read_json(private / "source-config.json")
     merged = {**template, **configured}
-    for section in ("price_source", "edinet", "manual_primary_sources"):
+    for section in (
+        "price_source",
+        "edinet",
+        "jpx_listed_master",
+        "jquants",
+        "manual_primary_sources",
+    ):
         merged[section] = {
             **template.get(section, {}),
             **configured.get(section, {}),
@@ -565,6 +573,41 @@ def scan_sources(
         health["blocking_gaps"].append(gap["gap_id"])
         coverage["official_sources"]["edinet"]["status"] = "UNAVAILABLE"
 
+    non_edinet = collect_non_edinet_sources(
+        run_id=run_id,
+        scan_dates=scan_dates,
+        targets=targets,
+        cutoff_at=cutoff_at,
+        started=started,
+        config=config,
+        run_dir=run_dir,
+        private=private,
+        fixture_dir=fixture_dir,
+        environ=environment,
+    )
+    health["providers"].update(non_edinet["providers"])
+    source_rows.extend(non_edinet["source_rows"])
+    tasks.extend(non_edinet["tasks"])
+    successful_gap_sources.update(non_edinet["successful_gap_sources"])
+    for failure in non_edinet["blocking_failures"]:
+        source = str(failure["source"])
+        gap = _gap(
+            gap_id=f"{run_id}-{source}",
+            source=source,
+            impact=str(failure["impact"]),
+            retry_after=retry_after,
+        )
+        gaps.append(gap)
+        health["blocking_gaps"].append(gap["gap_id"])
+        tasks.append(
+            _task(
+                task_id=f"manual-{source}-{run_id}",
+                task_type="MANUAL_PRIMARY_SOURCE_CHECK",
+                priority="URGENT",
+                reason=str(failure["reason"]),
+            )
+        )
+
     # TDnet and the cash-equity calendar are always checked against first-party
     # public pages. Official target prices are required only when a holding or
     # active watchlist target exists; an empty-universe candidate review cannot
@@ -574,21 +617,23 @@ def scan_sources(
             "tdnet",
             "material timely disclosures could be missing; trade decisions are blocked",
             "Check TDnet disclosures through the cutoff and attach query evidence",
-        ),
-        (
-            "trading_calendar",
-            "the next trading date is unconfirmed; order tickets are blocked",
-            "Confirm the next cash-equity trading date with JPX calendar evidence",
-        ),
+        )
     ]
-    if targets:
-        manual_checks.insert(
-            1,
+    if targets and "official_market_data" not in successful_gap_sources:
+        manual_checks.append(
             (
                 "official_market_data",
                 "official price inputs are incomplete; new and additional buys are blocked",
                 "Confirm target prices and corporate actions with JPX, company IR, or brokerage evidence",
-            ),
+            )
+        )
+    if "trading_calendar" not in successful_gap_sources:
+        manual_checks.append(
+            (
+                "trading_calendar",
+                "the next trading date is unconfirmed; order tickets are blocked",
+                "Confirm the next cash-equity trading date with JPX calendar evidence",
+            )
         )
     for source, impact, reason in manual_checks:
         gap = _gap(
@@ -670,6 +715,9 @@ def scan_sources(
         "blocking_gap_count": len(open_blocking_gaps),
         "provider_health": f"operations/private/runs/{run_id}/provider-health.json",
         "research_queue": f"operations/private/runs/{run_id}/research-queue.json",
+        "reference_data_manifest": (
+            f"operations/private/runs/{run_id}/{non_edinet['manifest_path']}"
+        ),
     }
 
 

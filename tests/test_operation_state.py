@@ -45,6 +45,9 @@ class OperationStateTest(unittest.TestCase):
             "recovered-capital-ledger.csv",
             "capital-ledger.csv",
             "corporate-actions.csv",
+            "forecast-history.csv",
+            "share-count-history.csv",
+            "earnings-calendar-history.csv",
             "rebuy-restrictions.csv",
             "industry-exposure.csv",
         ):
@@ -180,12 +183,16 @@ class OperationStateTest(unittest.TestCase):
             entries = list(csv.DictReader(source))
 
         self.assertIn("operations/private/source-config.json", result["migrated"])
-        self.assertEqual(migrated["schema_version"], "1.2")
+        self.assertEqual(migrated["schema_version"], "1.3")
         self.assertEqual(
             migrated["price_source"]["provider"],
             "yahoo_finance_unofficial_tracked_archive",
         )
-        self.assertNotIn("jquants", migrated)
+        self.assertTrue(migrated["jquants"]["enabled"])
+        self.assertEqual(
+            migrated["jquants"]["base_url"], "https://api.jquants.com/v2"
+        )
+        self.assertTrue(migrated["jpx_listed_master"]["enabled"])
         self.assertNotIn("base_urls", migrated["price_source"])
         self.assertEqual(
             migrated["price_source"]["minimum_daily_archive_coverage"], 0.98
@@ -205,7 +212,7 @@ class OperationStateTest(unittest.TestCase):
             migrated["market_regime"]["minimum_breadth_coverage"], 0.98
         )
         self.assertEqual(entries[-1]["from_schema"], "1.0")
-        self.assertEqual(entries[-1]["to_schema"], "1.2")
+        self.assertEqual(entries[-1]["to_schema"], "1.3")
 
     def test_migrates_legacy_migration_log_snapshot_column(self) -> None:
         initialize_or_migrate_workspace(self.root)
