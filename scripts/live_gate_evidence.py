@@ -36,7 +36,7 @@ PAPER_DURATION_GATE = "minimum_12_month_paper_trade"
 SHADOW_RUN_GATE = "twenty_day_shadow_run"
 OFFICIAL_COVERAGE_GATE = "official_source_coverage"
 REPOSITORY_RECOVERY_GATE = "private_repository_recovery"
-REPOSITORY_LAYOUT_REVISION = 1
+REPOSITORY_LAYOUT_REVISION = 2
 PERSONAL_RISK_GATE = "personal_risk_and_broker_check"
 V04_PROMOTION_GATE = "v04_holdout_promotion"
 LIVE_PROMOTION_GATE = "live_promotion"
@@ -92,12 +92,39 @@ def _directory_sha256(path: Path) -> str:
 def _safe_project_path(root: Path, relative: Any) -> Path | None:
     if not isinstance(relative, str) or not relative.strip():
         return None
-    candidate = (root / relative).resolve()
-    try:
-        candidate.relative_to(root.resolve())
-    except ValueError:
+    relative_path = Path(relative)
+    if relative_path.is_absolute() or ".." in relative_path.parts:
         return None
-    return candidate
+    candidate = (root / relative_path).resolve()
+    allowed_roots = (root.resolve(), (root / "operations/private").resolve())
+    for allowed in allowed_roots:
+        try:
+            candidate.relative_to(allowed)
+        except ValueError:
+            continue
+        return candidate
+    return None
+
+
+def _path_is_under_evidence_roots(root: Path, path: Path) -> bool:
+    candidate = path.resolve()
+    for allowed in (root.resolve(), (root / "operations/private").resolve()):
+        try:
+            candidate.relative_to(allowed)
+        except ValueError:
+            continue
+        return True
+    return False
+
+
+def _preferred_path(root: Path, private_relative: str, legacy_relative: str) -> Path:
+    private_candidate = root / "operations/private" / private_relative
+    legacy_candidate = root / legacy_relative
+    return (
+        private_candidate
+        if private_candidate.is_file() or not legacy_candidate.is_file()
+        else legacy_candidate
+    )
 
 
 def _aware_datetime(value: Any) -> bool:
@@ -150,15 +177,15 @@ def evaluate_point_in_time(
 ) -> dict[str, Any]:
     """Validate a point-in-time full-universe replay manifest and its artifacts."""
     root = root.resolve()
-    manifest_path = manifest_path or (
-        root / "data/historical-replay/point-in-time-validation.json"
+    manifest_path = manifest_path or _preferred_path(
+        root,
+        "historical-replay/2025-2026/output/point-in-time-validation.json",
+        "data/historical-replay/point-in-time-validation.json",
     )
-    try:
-        manifest_path.resolve().relative_to(root)
-    except ValueError:
+    if not _path_is_under_evidence_roots(root, manifest_path):
         return _result(
             gate=POINT_IN_TIME_GATE,
-            blockers=["manifest path must stay under project root"],
+            blockers=["manifest path must stay under project or operations/private"],
             metrics={},
             inputs=[],
         )
@@ -189,6 +216,12 @@ def evaluate_point_in_time(
         blockers.append("as_of_date must be an ISO date")
     if not _aware_datetime(manifest.get("generated_at_jst")):
         blockers.append("generated_at_jst must include a UTC offset")
+    elif _parse_aware_datetime(manifest["generated_at_jst"]) > datetime.now(tz=JST):
+        blockers.append("generated_at_jst cannot be in the future")
+    if _iso_date(manifest.get("as_of_date")) and date.fromisoformat(
+        manifest["as_of_date"]
+    ) > datetime.now(tz=JST).date():
+        blockers.append("as_of_date cannot be in the future")
 
     universe = manifest.get("universe")
     if not isinstance(universe, dict):
@@ -216,6 +249,22 @@ def evaluate_point_in_time(
     for field in ("missing_hard_gate_inputs", "lookahead_violations"):
         if quality.get(field) != 0:
             blockers.append(f"quality.{field} must be 0")
+    required_reviews = quality.get("required_disclosure_reviews")
+    completed_reviews = quality.get("completed_disclosure_reviews")
+    if (
+        not isinstance(required_reviews, int)
+        or isinstance(required_reviews, bool)
+        or required_reviews < 0
+    ):
+        blockers.append("quality.required_disclosure_reviews must be a non-negative integer")
+    if (
+        not isinstance(completed_reviews, int)
+        or isinstance(completed_reviews, bool)
+        or completed_reviews != required_reviews
+    ):
+        blockers.append(
+            "quality.completed_disclosure_reviews must equal required_disclosure_reviews"
+        )
 
     artifacts = manifest.get("artifacts")
     if not isinstance(artifacts, list) or not artifacts:
@@ -253,9 +302,12 @@ def evaluate_point_in_time(
         checked_inputs.append(
             {"role": str(role), "path": str(relative), "sha256": actual_hash}
         )
-    for role in ("source_snapshot", "trade_log", "metrics"):
-        if role not in roles:
-            blockers.append(f"artifact role is missing: {role}")
+    if "source_snapshot" not in roles:
+        blockers.append("artifact role is missing: source_snapshot")
+    if not roles.intersection({"universe_validation", "trade_log"}):
+        blockers.append("artifact role is missing: universe_validation")
+    if not roles.intersection({"quality_report", "metrics"}):
+        blockers.append("artifact role is missing: quality_report")
 
     inputs = [
         {
@@ -270,6 +322,8 @@ def evaluate_point_in_time(
         "evaluated_count": evaluated_count,
         "missing_hard_gate_inputs": quality.get("missing_hard_gate_inputs"),
         "lookahead_violations": quality.get("lookahead_violations"),
+        "required_disclosure_reviews": required_reviews,
+        "completed_disclosure_reviews": completed_reviews,
         "verified_artifact_count": len(checked_inputs),
     }
     return _result(
@@ -288,8 +342,10 @@ def evaluate_historical_replay(
 ) -> dict[str, Any]:
     """Validate the fixed 2025-2026 replay and a private human acceptance."""
     root = root.resolve()
-    result_path = result_path or (
-        root / "data/historical-replay/replay-result-2025-2026.json"
+    result_path = result_path or _preferred_path(
+        root,
+        "historical-replay/2025-2026/output/replay-result-2025-2026.json",
+        "data/historical-replay/replay-result-2025-2026.json",
     )
     review_path = review_path or (
         root / "operations/private/evidence/historical-replay-review.json"
@@ -297,10 +353,8 @@ def evaluate_historical_replay(
     blockers: list[str] = []
     inputs: list[dict[str, str]] = []
 
-    try:
-        result_path.resolve().relative_to(root)
-    except ValueError:
-        blockers.append("replay result path must stay under project root")
+    if not _path_is_under_evidence_roots(root, result_path):
+        blockers.append("replay result path must stay under project or operations/private")
     if not result_path.is_file():
         blockers.append(f"replay result is missing: {result_path}")
         result: dict[str, Any] = {}
@@ -349,6 +403,10 @@ def evaluate_historical_replay(
             blockers.append("replay result status must be COMPLETED")
         if result.get("rule_version") != "v0.4":
             blockers.append("replay result rule_version must be v0.4")
+        if result.get("evaluation_kind") != "RETROSPECTIVE_STRESS_TEST":
+            blockers.append("2025-2026 replay must be a RETROSPECTIVE_STRESS_TEST")
+        if result.get("holdout_claimed") is not False:
+            blockers.append("2025-2026 retrospective replay cannot claim holdout status")
         period = result.get("period")
         if not isinstance(period, dict):
             period = {}
@@ -359,6 +417,13 @@ def evaluate_historical_replay(
             blockers.append("replay period.through must be 2026-08-31")
         if not _aware_datetime(result.get("generated_at_jst")):
             blockers.append("replay generated_at_jst must include a UTC offset")
+            replay_generated_at = None
+        else:
+            replay_generated_at = _parse_aware_datetime(result["generated_at_jst"])
+            if replay_generated_at.date() < date(2026, 8, 31):
+                blockers.append("replay cannot be generated before period.through")
+            if replay_generated_at > datetime.now(tz=JST):
+                blockers.append("replay generated_at_jst cannot be in the future")
         quality = result.get("quality")
         if not isinstance(quality, dict):
             quality = {}
@@ -366,6 +431,17 @@ def evaluate_historical_replay(
         for field in ("missing_hard_gate_inputs", "lookahead_violations"):
             if quality.get(field) != 0:
                 blockers.append(f"replay quality.{field} must be 0")
+        required_reviews = quality.get("required_disclosure_reviews")
+        completed_reviews = quality.get("completed_disclosure_reviews")
+        if (
+            not isinstance(required_reviews, int)
+            or isinstance(required_reviews, bool)
+            or required_reviews < 0
+            or not isinstance(completed_reviews, int)
+            or isinstance(completed_reviews, bool)
+            or completed_reviews != required_reviews
+        ):
+            blockers.append("replay disclosure review coverage must be complete")
         metrics = result.get("metrics")
         if not isinstance(metrics, dict):
             metrics = {}
@@ -387,10 +463,50 @@ def evaluate_historical_replay(
             "trade_count", 0
         ) <= 0:
             blockers.append("replay metrics.trade_count must be a positive integer")
-
-        point_manifest = (
-            root / "data/historical-replay/point-in-time-validation.json"
+        comparisons = result.get("comparisons")
+        if not isinstance(comparisons, dict):
+            comparisons = {}
+            blockers.append("replay comparisons must be an object")
+        comparison_fields = (
+            "return_pct",
+            "maximum_drawdown_pct",
+            "maximum_single_name_loss_contribution_pct",
+            "maximum_industry_loss_contribution_pct",
+            "trade_count",
         )
+        for version in ("v0.2", "v0.4"):
+            version_metrics = comparisons.get(version)
+            if not isinstance(version_metrics, dict):
+                version_metrics = {}
+                blockers.append(f"replay comparisons.{version} must be an object")
+            for name in comparison_fields:
+                value = version_metrics.get(name)
+                if (
+                    not isinstance(value, (int, float))
+                    or isinstance(value, bool)
+                    or not math.isfinite(value)
+                ):
+                    blockers.append(f"replay comparisons.{version}.{name} must be numeric")
+        v04_metrics = comparisons.get("v0.4", {})
+        if isinstance(v04_metrics, dict):
+            for summary_name, comparison_name in (
+                ("trade_count", "trade_count"),
+                ("total_return_pct", "return_pct"),
+                ("max_drawdown_pct", "maximum_drawdown_pct"),
+            ):
+                if metrics.get(summary_name) != v04_metrics.get(comparison_name):
+                    blockers.append(
+                        f"replay metrics.{summary_name} does not match comparisons.v0.4"
+                    )
+
+        point_relative = result.get("point_in_time_manifest_path")
+        point_manifest = _safe_project_path(root, point_relative)
+        if point_manifest is None:
+            point_manifest = _preferred_path(
+                root,
+                "historical-replay/2025-2026/output/point-in-time-validation.json",
+                "data/historical-replay/point-in-time-validation.json",
+            )
         point_evaluation = evaluate_point_in_time(
             root=root, manifest_path=point_manifest
         )
@@ -434,10 +550,12 @@ def evaluate_historical_replay(
                 blockers.append(f"replay artifact role is missing: {role}")
     else:
         metrics = {}
+        comparisons = {}
+        replay_generated_at = None
 
     if review:
-        if review.get("schema_version") != "1.0":
-            blockers.append("private review schema_version must be 1.0")
+        if review.get("schema_version") != "1.1":
+            blockers.append("private review schema_version must be 1.1")
         if review.get("decision") != "ACCEPT":
             blockers.append("private review decision must be ACCEPT")
         if review.get("rule_version") != "v0.4":
@@ -448,6 +566,12 @@ def evaluate_historical_replay(
             blockers.append("private review accepted_by is required")
         if not _aware_datetime(review.get("accepted_at_jst")):
             blockers.append("private review accepted_at_jst must include a UTC offset")
+        else:
+            accepted_at = _parse_aware_datetime(review["accepted_at_jst"])
+            if accepted_at > datetime.now(tz=JST):
+                blockers.append("private review accepted_at_jst cannot be in the future")
+            if replay_generated_at and accepted_at < replay_generated_at:
+                blockers.append("private review cannot precede replay generation")
         if result_path.is_file() and review.get("replay_result_sha256") != _sha256(
             result_path
         ):
@@ -459,6 +583,20 @@ def evaluate_historical_replay(
         ):
             if review.get(field) is not True:
                 blockers.append(f"private review {field} must be true")
+        accepted_metrics = review.get("accepted_v04_metrics")
+        if not isinstance(accepted_metrics, dict):
+            accepted_metrics = {}
+            blockers.append("private review accepted_v04_metrics must be an object")
+        v04_metrics = comparisons.get("v0.4", {})
+        for name in (
+            "return_pct",
+            "maximum_drawdown_pct",
+            "maximum_single_name_loss_contribution_pct",
+            "maximum_industry_loss_contribution_pct",
+            "trade_count",
+        ):
+            if not isinstance(v04_metrics, dict) or accepted_metrics.get(name) != v04_metrics.get(name):
+                blockers.append(f"private review accepted metric does not match replay: {name}")
 
     return _result(
         gate=HISTORICAL_REPLAY_GATE,
@@ -1373,12 +1511,15 @@ def evaluate_v04_promotion(
     replay_path: Path | None = None,
     historical_evidence_path: Path | None = None,
     review_path: Path | None = None,
+    at: datetime | None = None,
 ) -> dict[str, Any]:
-    """Validate an explicit v0.4 holdout promotion bound to accepted evidence."""
+    """Validate a post-freeze forward holdout and explicit owner promotion."""
     root = root.resolve()
+    reference_time = (at or datetime.now(tz=JST)).astimezone(JST)
     private_root = (root / "operations/private").resolve()
     replay_path = replay_path or (
-        root / "data/historical-replay/replay-result-2025-2026.json"
+        private_root
+        / "historical-replay/v04-forward/output/replay-result-v04-forward-holdout.json"
     )
     historical_evidence_path = historical_evidence_path or (
         private_root / "evidence/historical-replay.json"
@@ -1387,14 +1528,20 @@ def evaluate_v04_promotion(
     blockers: list[str] = []
     inputs: list[dict[str, str]] = []
     documents: dict[str, dict[str, Any]] = {}
-    for role, path, allowed_root in (
-        ("replay_result", replay_path, root),
-        ("historical_replay_evidence", historical_evidence_path, private_root),
-        ("v04_holdout_review", review_path, private_root),
+    for role, path in (
+        ("replay_result", replay_path),
+        ("historical_replay_evidence", historical_evidence_path),
+        ("v04_holdout_review", review_path),
     ):
-        try:
-            path.resolve().relative_to(allowed_root)
-        except ValueError:
+        if role == "replay_result":
+            allowed = _path_is_under_evidence_roots(root, path)
+        else:
+            try:
+                path.resolve().relative_to(private_root)
+                allowed = True
+            except ValueError:
+                allowed = False
+        if not allowed:
             blockers.append(f"{role} path is outside its allowed root")
         if not path.is_file():
             blockers.append(f"{role} is missing: {path}")
@@ -1417,14 +1564,53 @@ def evaluate_v04_promotion(
     replay = documents["replay_result"]
     historical = documents["historical_replay_evidence"]
     review = documents["v04_holdout_review"]
+    holdout: dict[str, Any] = {}
+    plan: dict[str, Any] = {}
+    plan_path: Path | None = None
+    comparisons: dict[str, Any] = {}
     if replay:
         if replay.get("schema_version") != "1.0" or replay.get("status") != "COMPLETED":
             blockers.append("v0.4 promotion requires a completed replay schema 1.0")
         if replay.get("rule_version") != "v0.4":
             blockers.append("v0.4 promotion replay rule_version must be v0.4")
-        period = replay.get("period", {})
-        if period != {"from": "2025-01-01", "through": "2026-08-31"}:
-            blockers.append("v0.4 promotion requires the fixed 2025-2026 holdout")
+        if replay.get("evaluation_kind") != "FORWARD_HOLDOUT":
+            blockers.append("v0.4 promotion requires a FORWARD_HOLDOUT replay")
+        if replay.get("holdout_claimed") is not True:
+            blockers.append("v0.4 promotion replay must claim only a genuine forward holdout")
+        period = replay.get("period")
+        if not isinstance(period, dict) or not _iso_date(period.get("from")) or not _iso_date(
+            period.get("through")
+        ):
+            period = {}
+            blockers.append("forward holdout period must contain ISO dates")
+        elif period["from"] > period["through"]:
+            blockers.append("forward holdout period is reversed")
+        if not _aware_datetime(replay.get("generated_at_jst")):
+            blockers.append("replay generated_at_jst must include a UTC offset")
+        else:
+            replay_generated_at = _parse_aware_datetime(replay["generated_at_jst"])
+            if replay_generated_at > reference_time:
+                blockers.append("forward holdout result cannot be generated in the future")
+            if period and replay_generated_at.date() < date.fromisoformat(period["through"]):
+                blockers.append("forward holdout result was generated before period.through")
+        quality = replay.get("quality")
+        if not isinstance(quality, dict):
+            quality = {}
+            blockers.append("replay quality must be an object")
+        for name in ("missing_hard_gate_inputs", "lookahead_violations"):
+            if quality.get(name) != 0:
+                blockers.append(f"replay quality.{name} must be 0")
+        required_reviews = quality.get("required_disclosure_reviews")
+        completed_reviews = quality.get("completed_disclosure_reviews")
+        if (
+            not isinstance(required_reviews, int)
+            or isinstance(required_reviews, bool)
+            or required_reviews < 0
+            or not isinstance(completed_reviews, int)
+            or isinstance(completed_reviews, bool)
+            or completed_reviews != required_reviews
+        ):
+            blockers.append("forward replay disclosure review coverage must be complete")
         holdout = replay.get("holdout")
         if not isinstance(holdout, dict):
             holdout = {}
@@ -1433,23 +1619,112 @@ def evaluate_v04_promotion(
             blockers.append("replay holdout.predeclared must be true")
         if holdout.get("retuning_count") != 0:
             blockers.append("replay holdout.retuning_count must be 0")
-        if not _aware_datetime(holdout.get("thresholds_frozen_at_jst")):
-            blockers.append("holdout thresholds_frozen_at_jst must include a UTC offset")
-        elif _parse_aware_datetime(holdout["thresholds_frozen_at_jst"]).date() >= date(
-            2025, 1, 1
-        ):
-            blockers.append("holdout thresholds must be frozen before the holdout period")
-        if not _aware_datetime(replay.get("generated_at_jst")):
-            blockers.append("replay generated_at_jst must include a UTC offset")
+        for name in ("plan_frozen_at_jst", "rule_frozen_at_jst"):
+            if not _aware_datetime(holdout.get(name)):
+                blockers.append(f"replay holdout.{name} must include a UTC offset")
+        if _aware_datetime(holdout.get("rule_frozen_at_jst")) and _parse_aware_datetime(
+            holdout["rule_frozen_at_jst"]
+        ).date() < date(2026, 9, 1):
+            blockers.append("v0.4 rule freeze cannot predate its 2026-09-01 effective date")
+        if period and _aware_datetime(holdout.get("plan_frozen_at_jst")) and _parse_aware_datetime(
+            holdout["plan_frozen_at_jst"]
+        ).date() >= date.fromisoformat(period["from"]):
+            blockers.append("holdout plan must be frozen before the forward period")
+        plan_path = _safe_project_path(root, holdout.get("plan_path"))
+        if plan_path is None or not plan_path.is_file():
+            blockers.append("holdout plan path is missing or unsafe")
+        elif holdout.get("plan_sha256") != _sha256(plan_path):
+            blockers.append("holdout plan hash does not match")
+        else:
+            try:
+                plan = _read_object(plan_path)
+            except (OSError, ValueError, json.JSONDecodeError) as error:
+                blockers.append(f"holdout plan is invalid: {error}")
+            else:
+                inputs.append(
+                    {"role": "holdout_plan", "path": str(holdout["plan_path"]),
+                     "sha256": _sha256(plan_path)}
+                )
+                if plan.get("schema_version") != "1.0" or plan.get("status") != "FROZEN":
+                    blockers.append("holdout plan must be frozen schema 1.0")
+                if plan.get("decision") != "START_FORWARD_HOLDOUT":
+                    blockers.append("holdout plan decision must be START_FORWARD_HOLDOUT")
+                if plan.get("rule_version") != "v0.4" or plan.get("period") != period:
+                    blockers.append("holdout plan rule or period does not match replay")
+                if not isinstance(plan.get("declared_by"), str) or not plan.get(
+                    "declared_by", ""
+                ).strip():
+                    blockers.append("holdout plan declared_by is required")
+                if plan.get("frozen_at_jst") != holdout.get("plan_frozen_at_jst"):
+                    blockers.append("holdout plan frozen timestamp does not match replay")
+                if plan.get("rule_frozen_at_jst") != holdout.get("rule_frozen_at_jst"):
+                    blockers.append("holdout rule frozen timestamp does not match replay")
+                if plan.get("acceptance_criteria") != holdout.get("acceptance_criteria"):
+                    blockers.append("holdout acceptance criteria do not match the frozen plan")
+                if _aware_datetime(plan.get("frozen_at_jst")) and _aware_datetime(
+                    plan.get("rule_frozen_at_jst")
+                ) and _parse_aware_datetime(plan["frozen_at_jst"]) < _parse_aware_datetime(
+                    plan["rule_frozen_at_jst"]
+                ):
+                    blockers.append("holdout plan cannot precede the v0.4 rule freeze")
+                if _aware_datetime(plan.get("frozen_at_jst")) and _parse_aware_datetime(
+                    plan["frozen_at_jst"]
+                ) > reference_time:
+                    blockers.append("holdout plan frozen_at_jst cannot be in the future")
+                plan_criteria = plan.get("acceptance_criteria")
+                if not isinstance(plan_criteria, dict):
+                    plan_criteria = {}
+                    blockers.append("holdout plan acceptance_criteria must be an object")
+                for name in (
+                    "minimum_monthly_evaluation_count",
+                    "minimum_trade_count",
+                ):
+                    value = plan_criteria.get(name)
+                    if (
+                        not isinstance(value, int)
+                        or isinstance(value, bool)
+                        or value < 1
+                    ):
+                        blockers.append(f"holdout plan {name} must be a positive integer")
+                for name in (
+                    "maximum_drawdown_floor_pct",
+                    "maximum_single_name_loss_floor_pct",
+                    "maximum_industry_loss_floor_pct",
+                ):
+                    value = plan_criteria.get(name)
+                    if (
+                        not isinstance(value, (int, float))
+                        or isinstance(value, bool)
+                        or not math.isfinite(value)
+                        or not -100 <= value <= 0
+                    ):
+                        blockers.append(
+                            f"holdout plan {name} must be numeric between -100 and 0"
+                        )
+                plan_acknowledgements = plan.get("acknowledgements")
+                if not isinstance(plan_acknowledgements, dict):
+                    plan_acknowledgements = {}
+                    blockers.append("holdout plan acknowledgements must be an object")
+                for name in (
+                    "period_was_unobserved_when_frozen",
+                    "inputs_and_execution_rules_frozen",
+                    "thresholds_frozen_before_results",
+                    "changes_restart_the_holdout",
+                    "jquants_will_not_be_used",
+                ):
+                    if plan_acknowledgements.get(name) is not True:
+                        blockers.append(f"holdout plan acknowledgement {name} must be true")
+        if holdout.get("criteria_met") is not True or holdout.get("criterion_failures") != []:
+            blockers.append("forward holdout did not meet its frozen acceptance criteria")
+
         comparisons = replay.get("comparisons")
         if not isinstance(comparisons, dict):
             comparisons = {}
             blockers.append("replay comparisons must be an object")
         required_metrics = (
-            "return_pct",
-            "maximum_drawdown_pct",
+            "return_pct", "maximum_drawdown_pct",
             "maximum_single_name_loss_contribution_pct",
-            "maximum_industry_loss_contribution_pct",
+            "maximum_industry_loss_contribution_pct", "trade_count",
         )
         for version in ("v0.2", "v0.4"):
             version_metrics = comparisons.get(version)
@@ -1458,42 +1733,53 @@ def evaluate_v04_promotion(
                 blockers.append(f"replay comparisons.{version} must be an object")
             for name in required_metrics:
                 value = version_metrics.get(name)
-                if (
-                    not isinstance(value, (int, float))
-                    or isinstance(value, bool)
-                    or not math.isfinite(value)
-                ):
+                if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
                     blockers.append(f"replay comparisons.{version}.{name} must be numeric")
-    else:
-        comparisons = {}
+        criteria = holdout.get("acceptance_criteria", {})
+        observations = holdout.get("observations", {})
+        v04 = comparisons.get("v0.4", {}) if isinstance(comparisons.get("v0.4"), dict) else {}
+        if isinstance(criteria, dict) and isinstance(observations, dict):
+            checks = (
+                (observations.get("monthly_evaluation_count"), criteria.get("minimum_monthly_evaluation_count"), ">="),
+                (observations.get("trade_count"), criteria.get("minimum_trade_count"), ">="),
+                (v04.get("maximum_drawdown_pct"), criteria.get("maximum_drawdown_floor_pct"), ">="),
+                (v04.get("maximum_single_name_loss_contribution_pct"), criteria.get("maximum_single_name_loss_floor_pct"), ">="),
+                (v04.get("maximum_industry_loss_contribution_pct"), criteria.get("maximum_industry_loss_floor_pct"), ">="),
+            )
+            if any(
+                not isinstance(actual, (int, float))
+                or isinstance(actual, bool)
+                or not isinstance(expected, (int, float))
+                or isinstance(expected, bool)
+                or actual < expected
+                for actual, expected, _ in checks
+            ):
+                blockers.append("frozen holdout acceptance criteria are not satisfied")
 
-    for role, evidence, expected_gate in (
-        ("historical replay", historical, HISTORICAL_REPLAY_GATE),
-    ):
-        if evidence:
-            if evidence.get("schema_version") != "1.0":
-                blockers.append(f"{role} evidence schema_version must be 1.0")
-            if evidence.get("gate") != expected_gate or evidence.get("eligible") is not True:
-                blockers.append(f"{role} evidence is not eligible")
-            if evidence.get("blockers") != []:
-                blockers.append(f"{role} evidence contains blockers")
+    if historical:
+        if historical.get("schema_version") != "1.0":
+            blockers.append("historical replay evidence schema_version must be 1.0")
+        if historical.get("gate") != HISTORICAL_REPLAY_GATE or historical.get("eligible") is not True:
+            blockers.append("historical replay evidence is not eligible")
+        if historical.get("blockers") != []:
+            blockers.append("historical replay evidence contains blockers")
 
     if review:
-        if review.get("schema_version") != "1.0":
-            blockers.append("v0.4 review schema_version must be 1.0")
+        if review.get("schema_version") != "1.1":
+            blockers.append("v0.4 review schema_version must be 1.1")
         if review.get("decision") != "PROMOTE_V0_4_TO_LIVE":
             blockers.append("v0.4 review decision must be PROMOTE_V0_4_TO_LIVE")
         if review.get("rule_version") != "v0.4":
             blockers.append("v0.4 review rule_version must be v0.4")
-        if not isinstance(review.get("approved_by"), str) or not review.get(
-            "approved_by", ""
-        ).strip():
+        if not isinstance(review.get("approved_by"), str) or not review.get("approved_by", "").strip():
             blockers.append("v0.4 review approved_by is required")
         if not _aware_datetime(review.get("approved_at_jst")):
             blockers.append("v0.4 review approved_at_jst must include a UTC offset")
             promotion_approved_at = None
         else:
             promotion_approved_at = _parse_aware_datetime(review["approved_at_jst"])
+            if promotion_approved_at > reference_time:
+                blockers.append("v0.4 review approved_at_jst cannot be in the future")
             if _aware_datetime(replay.get("generated_at_jst")) and promotion_approved_at < _parse_aware_datetime(
                 replay["generated_at_jst"]
             ):
@@ -1501,32 +1787,28 @@ def evaluate_v04_promotion(
         for name, path in (
             ("replay_result_sha256", replay_path),
             ("historical_replay_evidence_sha256", historical_evidence_path),
+            ("holdout_plan_sha256", plan_path),
         ):
-            if not path.is_file() or review.get(name) != _sha256(path):
+            if path is None or not path.is_file() or review.get(name) != _sha256(path):
                 blockers.append(f"v0.4 review {name} does not match")
-        for role, evidence in (
-            ("historical replay", historical),
-        ):
-            evaluated_at = evidence.get("evaluated_at_jst")
-            if evidence and not _aware_datetime(evaluated_at):
-                blockers.append(f"{role} evidence evaluated_at_jst is invalid")
-            elif (
-                evidence
-                and promotion_approved_at
-                and promotion_approved_at < _parse_aware_datetime(evaluated_at)
-            ):
-                blockers.append(f"v0.4 review predates {role} evidence")
+        evaluated_at = historical.get("evaluated_at_jst")
+        if historical and not _aware_datetime(evaluated_at):
+            blockers.append("historical replay evidence evaluated_at_jst is invalid")
+        elif historical:
+            historical_evaluated_at = _parse_aware_datetime(evaluated_at)
+            if historical_evaluated_at > reference_time:
+                blockers.append("historical replay evidence cannot be evaluated in the future")
+            if promotion_approved_at and promotion_approved_at < historical_evaluated_at:
+                blockers.append("v0.4 review predates historical replay evidence")
         acknowledgements = review.get("acknowledgements")
         if not isinstance(acknowledgements, dict):
             acknowledgements = {}
             blockers.append("v0.4 review acknowledgements must be an object")
         required_acknowledgements = (
-            "allocation_amplification_reviewed",
-            "maximum_drawdown_reviewed",
-            "single_name_concentration_loss_reviewed",
-            "industry_concentration_loss_reviewed",
-            "waiting_cash_is_not_safe_asset",
-            "no_holdout_retuning",
+            "allocation_amplification_reviewed", "maximum_drawdown_reviewed",
+            "single_name_concentration_loss_reviewed", "industry_concentration_loss_reviewed",
+            "waiting_cash_is_not_safe_asset", "no_holdout_retuning",
+            "holdout_chronology_reviewed", "frozen_acceptance_criteria_reviewed",
         )
         for name in required_acknowledgements:
             if acknowledgements.get(name) is not True:
@@ -1537,8 +1819,7 @@ def evaluate_v04_promotion(
             reviewed_metrics = {}
             blockers.append("v0.4 review accepted_v04_metrics must be an object")
         for name in (
-            "maximum_drawdown_pct",
-            "maximum_single_name_loss_contribution_pct",
+            "maximum_drawdown_pct", "maximum_single_name_loss_contribution_pct",
             "maximum_industry_loss_contribution_pct",
         ):
             if reviewed_metrics.get(name) != v04_metrics.get(name):
@@ -1551,14 +1832,12 @@ def evaluate_v04_promotion(
         gate=V04_PROMOTION_GATE,
         blockers=blockers,
         metrics={
-            "decision": review.get("decision"),
-            "approved_at_jst": review.get("approved_at_jst"),
-            "v02": comparisons.get("v0.2"),
-            "v04": comparisons.get("v0.4"),
+            "decision": review.get("decision"), "approved_at_jst": review.get("approved_at_jst"),
+            "holdout_period": replay.get("period"), "criteria_met": holdout.get("criteria_met"),
+            "v02": comparisons.get("v0.2"), "v04": comparisons.get("v0.4"),
             "acknowledgement_count": len(required_acknowledgements),
             "acknowledged_count": sum(
-                acknowledgements.get(name) is True
-                for name in required_acknowledgements
+                acknowledgements.get(name) is True for name in required_acknowledgements
             ),
         },
         inputs=inputs,

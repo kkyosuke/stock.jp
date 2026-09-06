@@ -55,6 +55,8 @@ def _valid_point_manifest(root: Path) -> Path:
         "quality": {
             "missing_hard_gate_inputs": 0,
             "lookahead_violations": 0,
+            "required_disclosure_reviews": 12,
+            "completed_disclosure_reviews": 12,
         },
         "artifacts": artifacts,
     }
@@ -102,8 +104,22 @@ class PointInTimeEvidenceTest(unittest.TestCase):
             result = evaluate_point_in_time(root=root, manifest_path=manifest)
         self.assertFalse(result["eligible"])
         self.assertEqual(
-            result["blockers"], ["manifest path must stay under project root"]
+            result["blockers"],
+            ["manifest path must stay under project or operations/private"],
         )
+
+    def test_future_manifest_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest_path = _valid_point_manifest(root)
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["generated_at_jst"] = "2999-01-01T20:00:00+09:00"
+            manifest["as_of_date"] = "2999-01-01"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            result = evaluate_point_in_time(root=root)
+        self.assertFalse(result["eligible"])
+        self.assertIn("generated_at_jst cannot be in the future", result["blockers"])
+        self.assertIn("as_of_date cannot be in the future", result["blockers"])
 
     def test_only_successful_private_evidence_can_be_written(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -134,24 +150,47 @@ class HistoricalReplayEvidenceTest(unittest.TestCase):
             "schema_version": "1.0",
             "status": "COMPLETED",
             "rule_version": "v0.4",
+            "evaluation_kind": "RETROSPECTIVE_STRESS_TEST",
+            "holdout_claimed": False,
             "generated_at_jst": "2026-09-01T20:00:00+09:00",
             "period": {"from": "2025-01-01", "through": "2026-08-31"},
             "point_in_time_manifest_sha256": hashlib.sha256(
                 point_manifest.read_bytes()
             ).hexdigest(),
-            "quality": {"missing_hard_gate_inputs": 0, "lookahead_violations": 0},
+            "quality": {
+                "missing_hard_gate_inputs": 0,
+                "lookahead_violations": 0,
+                "required_disclosure_reviews": 12,
+                "completed_disclosure_reviews": 12,
+            },
             "metrics": {
                 "trade_count": 42,
                 "total_return_pct": 8.1,
                 "max_drawdown_pct": -12.5,
                 "benchmark_return_pct": 5.0,
             },
+            "comparisons": {
+                "v0.2": {
+                    "return_pct": 4.0,
+                    "maximum_drawdown_pct": -8.0,
+                    "maximum_single_name_loss_contribution_pct": -1.0,
+                    "maximum_industry_loss_contribution_pct": -2.0,
+                    "trade_count": 38,
+                },
+                "v0.4": {
+                    "return_pct": 8.1,
+                    "maximum_drawdown_pct": -12.5,
+                    "maximum_single_name_loss_contribution_pct": -3.0,
+                    "maximum_industry_loss_contribution_pct": -5.0,
+                    "trade_count": 42,
+                },
+            },
             "artifacts": artifacts,
         }
         result_path = root / "data/historical-replay/replay-result-2025-2026.json"
         result_path.write_text(json.dumps(result), encoding="utf-8")
         review = {
-            "schema_version": "1.0",
+            "schema_version": "1.1",
             "decision": "ACCEPT",
             "rule_version": "v0.4",
             "accepted_by": "portfolio-owner",
@@ -162,6 +201,7 @@ class HistoricalReplayEvidenceTest(unittest.TestCase):
             "drawdown_reviewed": True,
             "concentration_loss_reviewed": True,
             "data_limitations_reviewed": True,
+            "accepted_v04_metrics": result["comparisons"]["v0.4"],
         }
         review_path = root / "operations/private/evidence/historical-replay-review.json"
         review_path.parent.mkdir(parents=True)
@@ -764,16 +804,60 @@ class PersonalRiskEvidenceTest(unittest.TestCase):
 
 class V04PromotionEvidenceTest(unittest.TestCase):
     def _write_promotion(self, root: Path) -> tuple[Path, Path, Path]:
+        private = root / "operations/private"
+        period = {"from": "2026-10-01", "through": "2027-03-31"}
+        criteria = {
+            "minimum_monthly_evaluation_count": 6,
+            "minimum_trade_count": 10,
+            "maximum_drawdown_floor_pct": -30.0,
+            "maximum_single_name_loss_floor_pct": -10.0,
+            "maximum_industry_loss_floor_pct": -20.0,
+        }
+        plan = {
+            "schema_version": "1.0",
+            "status": "FROZEN",
+            "decision": "START_FORWARD_HOLDOUT",
+            "rule_version": "v0.4",
+            "rule_frozen_at_jst": "2026-09-01T22:21:26+09:00",
+            "frozen_at_jst": "2026-09-06T08:00:00+09:00",
+            "declared_by": "portfolio-owner",
+            "period": period,
+            "acceptance_criteria": criteria,
+            "acknowledgements": {
+                "period_was_unobserved_when_frozen": True,
+                "inputs_and_execution_rules_frozen": True,
+                "thresholds_frozen_before_results": True,
+                "changes_restart_the_holdout": True,
+                "jquants_will_not_be_used": True,
+            },
+        }
+        plan_path = private / "evidence/v04-holdout-plan.json"
+        _write(plan_path, json.dumps(plan))
         replay = {
             "schema_version": "1.0",
             "status": "COMPLETED",
             "rule_version": "v0.4",
-            "generated_at_jst": "2026-08-31T21:00:00+09:00",
-            "period": {"from": "2025-01-01", "through": "2026-08-31"},
+            "evaluation_kind": "FORWARD_HOLDOUT",
+            "holdout_claimed": True,
+            "generated_at_jst": "2027-04-01T21:00:00+09:00",
+            "period": period,
+            "quality": {
+                "missing_hard_gate_inputs": 0,
+                "lookahead_violations": 0,
+                "required_disclosure_reviews": 6,
+                "completed_disclosure_reviews": 6,
+            },
             "holdout": {
                 "predeclared": True,
-                "thresholds_frozen_at_jst": "2024-12-31T15:30:00+09:00",
+                "plan_path": "operations/private/evidence/v04-holdout-plan.json",
+                "plan_sha256": hashlib.sha256(plan_path.read_bytes()).hexdigest(),
+                "plan_frozen_at_jst": "2026-09-06T08:00:00+09:00",
+                "rule_frozen_at_jst": "2026-09-01T22:21:26+09:00",
                 "retuning_count": 0,
+                "acceptance_criteria": criteria,
+                "observations": {"monthly_evaluation_count": 6, "trade_count": 20},
+                "criteria_met": True,
+                "criterion_failures": [],
             },
             "comparisons": {
                 "v0.2": {
@@ -781,40 +865,46 @@ class V04PromotionEvidenceTest(unittest.TestCase):
                     "maximum_drawdown_pct": -8.0,
                     "maximum_single_name_loss_contribution_pct": -1.0,
                     "maximum_industry_loss_contribution_pct": -2.0,
+                    "trade_count": 20,
                 },
                 "v0.4": {
                     "return_pct": 8.0,
                     "maximum_drawdown_pct": -25.0,
                     "maximum_single_name_loss_contribution_pct": -7.0,
                     "maximum_industry_loss_contribution_pct": -12.0,
+                    "trade_count": 20,
                 },
             },
         }
-        replay_path = root / "data/historical-replay/replay-result-2025-2026.json"
+        replay_path = (
+            private
+            / "historical-replay/v04-forward/output/replay-result-v04-forward-holdout.json"
+        )
         _write(replay_path, json.dumps(replay))
-        historical_path = root / "operations/private/evidence/historical-replay.json"
+        historical_path = private / "evidence/historical-replay.json"
         _write(
             historical_path,
             json.dumps(
                 {
                     "schema_version": "1.0",
                     "gate": "historical_replay_2025_2026_accepted",
-                    "evaluated_at_jst": "2026-08-31T22:00:00+09:00",
+                    "evaluated_at_jst": "2026-09-06T09:00:00+09:00",
                     "eligible": True,
                     "blockers": [],
                 }
             ),
         )
         review = {
-            "schema_version": "1.0",
+            "schema_version": "1.1",
             "decision": "PROMOTE_V0_4_TO_LIVE",
             "rule_version": "v0.4",
             "approved_by": "portfolio-owner",
-            "approved_at_jst": "2026-09-01T09:00:00+09:00",
+            "approved_at_jst": "2027-04-02T09:00:00+09:00",
             "replay_result_sha256": hashlib.sha256(replay_path.read_bytes()).hexdigest(),
             "historical_replay_evidence_sha256": hashlib.sha256(
                 historical_path.read_bytes()
             ).hexdigest(),
+            "holdout_plan_sha256": hashlib.sha256(plan_path.read_bytes()).hexdigest(),
             "acknowledgements": {
                 name: True
                 for name in (
@@ -824,6 +914,8 @@ class V04PromotionEvidenceTest(unittest.TestCase):
                     "industry_concentration_loss_reviewed",
                     "waiting_cash_is_not_safe_asset",
                     "no_holdout_retuning",
+                    "holdout_chronology_reviewed",
+                    "frozen_acceptance_criteria_reviewed",
                 )
             },
             "accepted_v04_metrics": {
@@ -835,7 +927,7 @@ class V04PromotionEvidenceTest(unittest.TestCase):
                 )
             },
         }
-        review_path = root / "operations/private/evidence/v04-holdout-review.json"
+        review_path = private / "evidence/v04-holdout-review.json"
         _write(review_path, json.dumps(review))
         return replay_path, historical_path, review_path
 
@@ -843,9 +935,11 @@ class V04PromotionEvidenceTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._write_promotion(root)
-            result = evaluate_v04_promotion(root=root)
+            result = evaluate_v04_promotion(
+                root=root, at=datetime.fromisoformat("2027-04-03T09:00:00+09:00")
+            )
         self.assertTrue(result["eligible"], result["blockers"])
-        self.assertEqual(result["metrics"]["acknowledged_count"], 6)
+        self.assertEqual(result["metrics"]["acknowledged_count"], 8)
 
     def test_changed_replay_invalidates_promotion(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -854,7 +948,9 @@ class V04PromotionEvidenceTest(unittest.TestCase):
             replay = json.loads(replay_path.read_text(encoding="utf-8"))
             replay["comparisons"]["v0.4"]["maximum_drawdown_pct"] = -40.0
             replay_path.write_text(json.dumps(replay), encoding="utf-8")
-            result = evaluate_v04_promotion(root=root)
+            result = evaluate_v04_promotion(
+                root=root, at=datetime.fromisoformat("2027-04-03T09:00:00+09:00")
+            )
         self.assertFalse(result["eligible"])
         self.assertIn("v0.4 review replay_result_sha256 does not match", result["blockers"])
 
@@ -865,8 +961,53 @@ class V04PromotionEvidenceTest(unittest.TestCase):
             self.assertFalse(
                 (root / "operations/private/evidence/paper-12-months.json").exists()
             )
-            result = evaluate_v04_promotion(root=root)
+            result = evaluate_v04_promotion(
+                root=root, at=datetime.fromisoformat("2027-04-03T09:00:00+09:00")
+            )
         self.assertTrue(result["eligible"], result["blockers"])
+
+    def test_unacknowledged_or_anonymous_holdout_plan_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            replay_path, _, _ = self._write_promotion(root)
+            plan_path = root / "operations/private/evidence/v04-holdout-plan.json"
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            plan["declared_by"] = None
+            plan["acknowledgements"]["period_was_unobserved_when_frozen"] = False
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            replay = json.loads(replay_path.read_text(encoding="utf-8"))
+            replay["holdout"]["plan_sha256"] = hashlib.sha256(
+                plan_path.read_bytes()
+            ).hexdigest()
+            replay_path.write_text(json.dumps(replay), encoding="utf-8")
+            result = evaluate_v04_promotion(
+                root=root, at=datetime.fromisoformat("2027-04-03T09:00:00+09:00")
+            )
+        self.assertFalse(result["eligible"])
+        self.assertIn("holdout plan declared_by is required", result["blockers"])
+        self.assertIn(
+            "holdout plan acknowledgement period_was_unobserved_when_frozen must be true",
+            result["blockers"],
+        )
+
+    def test_future_holdout_result_plan_and_review_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_promotion(root)
+            result = evaluate_v04_promotion(
+                root=root, at=datetime.fromisoformat("2026-09-05T12:00:00+09:00")
+            )
+        self.assertFalse(result["eligible"])
+        self.assertIn(
+            "forward holdout result cannot be generated in the future",
+            result["blockers"],
+        )
+        self.assertIn(
+            "holdout plan frozen_at_jst cannot be in the future", result["blockers"]
+        )
+        self.assertIn(
+            "v0.4 review approved_at_jst cannot be in the future", result["blockers"]
+        )
 
 
 class FinalLivePromotionTest(unittest.TestCase):

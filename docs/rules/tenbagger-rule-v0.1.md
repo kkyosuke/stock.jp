@@ -323,6 +323,9 @@ SOM-3Y = min(需要面の売上上限, 販売・生産能力から見た売上�
 
 ## 10. 使用する一次資料
 
+J-Quantsの記載は当時のデータ候補の記録である。2026年9月6日以降の運用と正式履歴replayでは
+J-Quantsを使用せず、[履歴再生の入力契約](../operations/historical-replay-v0.1.md)を優先する。
+
 - [J-Quants API](https://www.jpx.co.jp/markets/other-data-services/j-quants-api/index.html): 当時点の上場銘柄、分割調整株価、四半期財務、決算発表日
 - [東証上場会社情報サービス](https://www.jpx.co.jp/listing/co-search/01.html?method=init): 適時開示、法定開示、継続企業注記、上場会社の基本情報
 - [EDINET](https://disclosure2.edinet-fsa.go.jp/WEEK0010.aspx): 有価証券報告書、潜在株式、セグメント、主要顧客、関連当事者取引

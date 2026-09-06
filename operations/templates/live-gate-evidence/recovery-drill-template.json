@@ -4,7 +4,7 @@
   "operator": "{{OPERATOR}}",
   "repository_visibility": "PRIVATE",
   "reason": "PRE_LIVE",
-  "repository_layout_revision": 1,
+  "repository_layout_revision": 2,
   "started_at_jst": "{{STARTED_AT_JST}}",
   "completed_at_jst": "{{COMPLETED_AT_JST}}",
   "source_private_commit": "{{SOURCE_PRIVATE_COMMIT}}",

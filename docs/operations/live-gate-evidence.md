@@ -12,13 +12,14 @@ stock.jp/.venv/bin/python stock.jp/scripts/live_gate_evidence.py \
   --write-evidence stock.jp/operations/private/evidence/point-in-time.json
 ~~~
 
-既定入力は `data/historical-replay/point-in-time-validation.json` である。入力 manifest は以下をすべて満たす必要がある。
+既定入力はprivateの`operations/private/historical-replay/2025-2026/output/point-in-time-validation.json`である。入力manifestは以下をすべて満たす必要がある。
 
 - status が `COMPLETED` で、生成日時に UTC offset がある
 - 当時点の security master を使い、上場廃止、合併、corporate action を含む
 - 必須母集団数と評価済み数が一致する
 - hard-gate 入力欠損と look-ahead 違反がともに0件
-- `source_snapshot`、`trade_log`、`metrics` の3成果物が存在し、SHA-256 が一致する
+- 決算・重大開示の必須review数と完了review数が一致する
+- `source_snapshot`、`universe_validation`、`quality_report`の3成果物が存在し、SHA-256が一致する
 
 manifest や成果物を後から変更すると検証は失敗する。現在は必要な公式データが揃っていないため、証跡を作らず gate を `false` のまま維持する。
 
@@ -26,7 +27,7 @@ manifest や成果物を後から変更すると検証は失敗する。現在�
 
 ## 2025〜2026年の履歴再生受入
 
-`historical_replay_2025_2026_accepted` は、固定期間 `2025-01-01`〜`2026-08-31` の v0.4 再生結果と、利用者の private review の両方を検証する。
+`historical_replay_2025_2026_accepted`は、固定期間`2025-01-01`〜`2026-08-31`の回顧的stress testと、利用者のprivate reviewの両方を検証する。この期間はv0.4発効前を含むため、正式holdoutとは扱わない。
 
 ~~~bash
 stock.jp/.venv/bin/python stock.jp/scripts/live_gate_evidence.py \
@@ -34,7 +35,7 @@ stock.jp/.venv/bin/python stock.jp/scripts/live_gate_evidence.py \
   --write-evidence stock.jp/operations/private/evidence/historical-replay.json
 ~~~
 
-公開側の `data/historical-replay/replay-result-2025-2026.json` は、point-in-time manifest のハッシュ、欠損・look-ahead 違反0件、取引数、return、maximum drawdown、benchmark と、取引・月次・metrics 成果物のハッシュを持つ。private 側の `historical-replay-review.json` には、現在の再生結果のハッシュ、`ACCEPT`、承認者・承認日時、drawdown・集中損失・データ制約を確認した事実を記録する。
+再生器と入力契約は[point-in-time履歴再生](historical-replay-v0.1.md)を正本とする。privateの`operations/private/historical-replay/2025-2026/output/replay-result-2025-2026.json`は、`RETROSPECTIVE_STRESS_TEST`、`holdout_claimed: false`、point-in-time manifestのハッシュ、欠損・look-ahead違反0件、取引数、return、maximum drawdown、benchmarkと、取引・日次・月次・metrics成果物のハッシュを持つ。private側の`historical-replay-review.json`には、現在の再生結果のハッシュ、`ACCEPT`、承認者・承認日時、drawdown・集中損失・データ制約を確認した事実と、本人が受け入れたv0.4のreturn、最大DD、単一銘柄・業種損失寄与、取引数を記録する。
 
 再生結果を変更すると過去の review は無効になる。成績の数値だけでは自動受入せず、利用者の review がない状態では gate を `false` のままにする。
 
@@ -109,7 +110,8 @@ stock.jp/.venv/bin/python stock.jp/scripts/live_gate_evidence.py \
 
 ## v0.4 holdout 昇格
 
-`v04_holdout_promotion` は通常の必須gateとは別に必要である。point-in-timeの固定holdoutでv0.2とv0.4を比較し、`v04-holdout-review-template.json`をprivate evidenceへコピーして本人が判断する。PAPER期間証跡は要求しない。
+`v04_holdout_promotion`は通常の必須gateとは別に必要である。2025〜2026回顧的replayでは代替できない。まず`v04-holdout-plan-template.json`をprivate evidenceへコピーし、v0.4凍結後かつまだ観測していない期間、受入基準、入力・約定規則、再調整禁止を本人が結果を見る前に`FROZEN`へする。その期間のpoint-in-time全母集団でv0.2とv0.4を比較し、完了後に`v04-holdout-review-template.json`で本人が判断する。PAPER期間証跡は要求しない。
+結果生成日時、plan凍結日時、review承認日時、参照する回顧的replay証跡のいずれかが将来日時なら停止する。
 
 ~~~bash
 stock.jp/.venv/bin/python stock.jp/scripts/live_gate_evidence.py \
@@ -117,9 +119,11 @@ stock.jp/.venv/bin/python stock.jp/scripts/live_gate_evidence.py \
   --write-evidence stock.jp/operations/private/evidence/v04-promotion.json
 ~~~
 
-再生結果はholdoutの事前宣言、閾値凍結日時、再調整0回を持ち、v0.2/v0.4双方のreturn、maximum drawdown、1銘柄・業種の最大損失寄与を含める。本人はv0.4の資金配分による損失増幅と、戦略待機資金が安全資産でないことを確認する。
+planは`declared_by`、planとruleの凍結日時、固定期間、最低月次評価数・最低取引数、maximum drawdown・1銘柄・業種損失のfloor、5つの事前acknowledgementを必須とする。期間開始後の変更は同じholdoutを無効にし、新しい未観測期間で再開始する。
 
-review は再生結果と履歴再生受入証跡のSHA-256へ拘束する。いずれかを更新すると再承認が必要になる。PAPER期間証跡は任意diagnosticであり、この昇格の入力にはしない。判定は成績が正なら自動昇格するものではなく、本人が `PROMOTE_V0_4_TO_LIVE` を明示した場合だけ合格する。
+再生結果はplanのpathとSHA-256、事前宣言、再調整0回、固定基準の観測値と合否、v0.2/v0.4双方のreturn、maximum drawdown、1銘柄・業種の最大損失寄与を含める。本人はv0.4の資金配分による損失増幅、戦略待機資金が安全資産でないこと、時系列と固定基準を確認する。
+
+reviewは再生結果、履歴再生受入証跡、凍結planの3つのSHA-256へ拘束する。いずれかを更新すると再承認が必要になる。PAPER期間証跡は任意diagnosticであり、この昇格の入力にはしない。判定は成績が正なら自動昇格するものではなく、本人が`PROMOTE_V0_4_TO_LIVE`を明示した場合だけ合格する。
 
 ## 最終 LIVE 昇格
 

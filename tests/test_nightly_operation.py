@@ -29,6 +29,21 @@ class NightlyOperationTest(unittest.TestCase):
             PROJECT_ROOT / "operations/templates", self.root / "operations/templates"
         )
         initialize_or_migrate_workspace(self.root)
+        # Exercise the optional fixture adapter explicitly; production defaults
+        # remain disabled and do not use J-Quants.
+        config_path = self.root / "operations/private/source-config.json"
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        config["jquants"].update(
+            {
+                "enabled": True,
+                "listed_master_enabled": True,
+                "daily_bars_enabled": True,
+                "financial_summary_enabled": True,
+                "earnings_calendar_enabled": True,
+                "trading_calendar_enabled": True,
+            }
+        )
+        config_path.write_text(json.dumps(config) + "\n", encoding="utf-8")
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
