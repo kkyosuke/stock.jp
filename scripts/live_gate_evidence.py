@@ -36,7 +36,7 @@ PAPER_DURATION_GATE = "minimum_12_month_paper_trade"
 SHADOW_RUN_GATE = "twenty_day_shadow_run"
 OFFICIAL_COVERAGE_GATE = "official_source_coverage"
 REPOSITORY_RECOVERY_GATE = "private_repository_recovery"
-REPOSITORY_LAYOUT_REVISION = 2
+REPOSITORY_LAYOUT_REVISION = 3
 PERSONAL_RISK_GATE = "personal_risk_and_broker_check"
 V04_PROMOTION_GATE = "v04_holdout_promotion"
 LIVE_PROMOTION_GATE = "live_promotion"
@@ -1936,8 +1936,10 @@ def evaluate_live_promotion(
                 }
             )
             blockers.extend(f"operation policy: {item}" for item in validate_policy(policy))
-            if policy.get("operation_mode") != "PAPER":
-                blockers.append("operation_mode must still be PAPER before promotion")
+            if policy.get("operation_mode") not in {"PAPER", "LIMITED_LIVE"}:
+                blockers.append(
+                    "operation_mode must still be PAPER or LIMITED_LIVE before promotion"
+                )
             if policy.get("active_rule_version") != "v0.4":
                 blockers.append("active_rule_version must be v0.4")
             if policy.get("broker_submission") != "HUMAN_ONLY":
@@ -2177,8 +2179,8 @@ def apply_live_promotion(
     root = root.resolve()
     approval = _read_object(approval_path)
     policy = _read_object(policy_path)
-    if policy.get("operation_mode") != "PAPER":
-        raise ValueError("only a PAPER policy can be promoted")
+    if policy.get("operation_mode") not in {"PAPER", "LIMITED_LIVE"}:
+        raise ValueError("only a PAPER or LIMITED_LIVE policy can be promoted")
     if approval.get("pre_promotion_policy_sha256") != _sha256(policy_path):
         raise ValueError("approval does not bind the current policy")
     policy["operation_mode"] = "LIVE"

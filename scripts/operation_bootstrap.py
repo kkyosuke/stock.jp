@@ -12,6 +12,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 try:
+    from scripts.limited_live import validate_applied_limited_live
     from scripts.live_gate_evidence import validate_promoted_evidence_bundle
     from scripts.operation_policy import policy_status
     from scripts.operation_state import (
@@ -23,6 +24,7 @@ try:
         validate_tracked_price_snapshot,
     )
 except ModuleNotFoundError:  # Direct execution from scripts/
+    from limited_live import validate_applied_limited_live
     from live_gate_evidence import validate_promoted_evidence_bundle
     from operation_policy import policy_status
     from operation_state import initialize_or_migrate_workspace, validate_workspace
@@ -162,6 +164,21 @@ def check_readiness(
     if mode != "PAPER":
         paper_blockers.append("operation_mode must be PAPER for PAPER operation")
 
+    limited_live_blockers = list(base_blockers) + automatic_source_blockers
+    if mode == "LIMITED_LIVE":
+        limited_live_blockers.extend(
+            validate_applied_limited_live(root=root, policy=policy, at=now)
+        )
+    else:
+        limited_live_blockers.append(
+            "operation_mode has not been explicitly promoted to LIMITED_LIVE"
+        )
+    if not policy_result["limited_live_orders_allowed"]:
+        limited_live_blockers.append(
+            "LIMITED_LIVE controls incomplete: "
+            + ", ".join(policy_result["limited_live_gate_failures"])
+        )
+
     live_blockers = list(base_blockers) + automatic_source_blockers
     live_blockers.extend(
         _live_evidence_failures(
@@ -191,8 +208,14 @@ def check_readiness(
     )
 
     paper_blockers = sorted(set(paper_blockers))
+    limited_live_blockers = sorted(set(limited_live_blockers))
     live_blockers = sorted(set(live_blockers))
-    active_blockers = live_blockers if mode == "LIVE" else paper_blockers
+    if mode == "LIVE":
+        active_blockers = live_blockers
+    elif mode == "LIMITED_LIVE":
+        active_blockers = limited_live_blockers
+    else:
+        active_blockers = paper_blockers
     return {
         "status": (
             "BLOCKED"
@@ -201,6 +224,10 @@ def check_readiness(
         ),
         "ready": not active_blockers,
         "paper_go": not paper_blockers,
+        "limited_live_go": (
+            not limited_live_blockers
+            and policy_result["limited_live_orders_allowed"]
+        ),
         "live_go": not live_blockers and policy_result["live_orders_allowed"],
         "operation_mode": mode,
         "active_rule_version": policy.get("active_rule_version"),
@@ -210,6 +237,7 @@ def check_readiness(
         "price_snapshot": price_evidence,
         "blockers": active_blockers,
         "paper_blockers": paper_blockers,
+        "limited_live_blockers": limited_live_blockers,
         "live_blockers": live_blockers,
         "automatic_source_blockers": automatic_source_blockers,
         "warnings": warnings,

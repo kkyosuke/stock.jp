@@ -1141,6 +1141,45 @@ class FinalLivePromotionTest(unittest.TestCase):
         self.assertTrue(persisted["v04_holdout_promotion"])
         self.assertEqual(failures, [])
 
+    @patch("scripts.live_gate_evidence.evaluate_all_live_requirements")
+    def test_limited_live_can_be_promoted_after_all_full_live_gates_pass(
+        self, evaluate
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fresh, approval_path, policy_path = self._write_bundle(root)
+            policy = json.loads(policy_path.read_text(encoding="utf-8"))
+            policy["operation_mode"] = "LIMITED_LIVE"
+            policy["limited_live"].update(
+                {
+                    "capital_limit_jpy": 3_000_000,
+                    "maximum_total_loss_pct": 10.0,
+                    "approved_by": "portfolio-owner",
+                    "approved_at_jst": "2026-09-01T08:30:00+09:00",
+                    "evidence_path": (
+                        "operations/private/evidence/limited-live-plan.json"
+                    ),
+                    "evidence_sha256": "a" * 64,
+                }
+            )
+            policy_path.write_text(json.dumps(policy), encoding="utf-8")
+            approval = json.loads(approval_path.read_text(encoding="utf-8"))
+            approval["pre_promotion_policy_sha256"] = hashlib.sha256(
+                policy_path.read_bytes()
+            ).hexdigest()
+            approval_path.write_text(json.dumps(approval), encoding="utf-8")
+            evaluate.return_value = fresh
+            result = evaluate_live_promotion(root=root)
+            promoted = apply_live_promotion(
+                root=root,
+                result=result,
+                approval_path=approval_path,
+                policy_path=policy_path,
+            )
+
+        self.assertTrue(result["eligible"], result["blockers"])
+        self.assertEqual(promoted["operation_mode"], "LIVE")
+
     def test_ineligible_result_cannot_mutate_policy(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

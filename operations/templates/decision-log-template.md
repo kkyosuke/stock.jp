@@ -6,7 +6,7 @@
 - 評価日: `{{DATE}}`
 - 情報カットオフ: `YYYY-MM-DD HH:MM JST`
 - レビューモード: `{{MODE}}`
-- 運用モード: `PAPER / LIVE / PAUSED`
+- 運用モード: `PAPER / LIMITED_LIVE / LIVE / PAUSED`
 - 適用ルール版:
 - シャドー比較版:
 - 証券コード: `{{CODE}}`

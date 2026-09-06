@@ -24,7 +24,61 @@ class OperationPolicyTest(unittest.TestCase):
         self.assertEqual(status["operation_mode"], "PAPER")
         self.assertEqual(status["active_rule_version"], "v0.4")
         self.assertEqual(status["ticket_status"], "PAPER_PROPOSED")
+        self.assertFalse(status["limited_live_orders_allowed"])
         self.assertFalse(status["live_orders_allowed"])
+
+    def test_limited_live_requires_cap_loss_stop_and_typed_approval(self) -> None:
+        policy = copy.deepcopy(self.policy)
+        policy["operation_mode"] = "LIMITED_LIVE"
+        blocked = policy_status(policy)
+        policy["limited_live"].update(
+            {
+                "capital_limit_jpy": 3_000_000,
+                "maximum_total_loss_pct": 10.0,
+                "approved_by": "portfolio-owner",
+                "approved_at_jst": "2026-09-06T18:00:00+09:00",
+                "evidence_path": "operations/private/evidence/limited-live-plan.json",
+                "evidence_sha256": "a" * 64,
+            }
+        )
+        allowed = policy_status(policy)
+
+        self.assertFalse(blocked["limited_live_orders_allowed"])
+        self.assertTrue(allowed["limited_live_orders_allowed"])
+        self.assertFalse(allowed["live_orders_allowed"])
+        self.assertEqual(allowed["ticket_status"], "PROPOSED")
+
+    def test_limited_live_cannot_enable_adds_or_multiple_new_orders(self) -> None:
+        policy = copy.deepcopy(self.policy)
+        policy["operation_mode"] = "LIMITED_LIVE"
+        policy["limited_live"].update(
+            {
+                "capital_limit_jpy": 3_000_000,
+                "maximum_total_loss_pct": 10.0,
+                "maximum_new_orders_per_run": 2,
+                "additional_purchases_enabled": True,
+                "approved_by": "portfolio-owner",
+                "approved_at_jst": "2026-09-06T18:00:00+09:00",
+                "evidence_path": "operations/private/evidence/limited-live-plan.json",
+                "evidence_sha256": "a" * 64,
+            }
+        )
+
+        failures = policy_status(policy)["limited_live_gate_failures"]
+        self.assertIn(
+            "limited_live.maximum_new_orders_per_run must remain 1", failures
+        )
+        self.assertIn(
+            "limited_live.additional_purchases_enabled must remain false", failures
+        )
+
+    def test_limited_live_evidence_hash_must_be_sha256(self) -> None:
+        self.policy["limited_live"]["evidence_sha256"] = "not-a-sha"
+
+        self.assertIn(
+            "limited_live.evidence_sha256 must be a lowercase SHA-256 or null",
+            validate_policy(self.policy),
+        )
 
     def test_live_requires_every_gate_and_approval(self) -> None:
         policy = copy.deepcopy(self.policy)

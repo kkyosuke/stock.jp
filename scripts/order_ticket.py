@@ -1,4 +1,4 @@
-"""Create an auditable PAPER or approved-LIVE proposed order; never submit it."""
+"""Create an auditable PAPER or approved live-stage order; never submit it."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 try:
+    from scripts.limited_live import validate_limited_live_order
     from scripts.nightly_artifacts import ACTION_FIELDS, TRADE_ACTIONS
     from scripts.operation_policy import policy_status
     from scripts.operation_state import (
@@ -23,6 +24,7 @@ try:
     from scripts.position_sizing import validate_purchase_increment
     from scripts.run_integrity import OPEN_TICKET_STATUSES, require_run_lease
 except ModuleNotFoundError:  # Direct execution from scripts/
+    from limited_live import validate_limited_live_order
     from nightly_artifacts import ACTION_FIELDS, TRADE_ACTIONS
     from operation_policy import policy_status
     from operation_state import initialize_or_migrate_workspace, secure_private_tree
@@ -198,15 +200,32 @@ def propose_order(
             "invalid operation policy: " + "; ".join(status["validation_errors"])
         )
     if status["ticket_status"] == "BLOCKED":
-        detail = ", ".join(status["live_gate_failures"]) or str(
-            status["operation_mode"]
+        failures = (
+            status["limited_live_gate_failures"]
+            if status["operation_mode"] == "LIMITED_LIVE"
+            else status["live_gate_failures"]
         )
+        detail = ", ".join(failures) or str(status["operation_mode"])
         raise PermissionError(f"operation policy blocks order tickets: {detail}")
     validate_purchase_increment(
         rule_version=str(policy["active_rule_version"]),
         action=normalized_action,
         position_pct=float(position_text),
     )
+    limited_failures = validate_limited_live_order(
+        root=root,
+        policy=policy,
+        run_id=run_id,
+        action=normalized_action,
+        limit_price=float(limit_text),
+        quantity=int(float(quantity_text)),
+        position_pct=float(position_text),
+        at=prepared,
+    )
+    if limited_failures:
+        raise PermissionError(
+            "LIMITED_LIVE order blocked: " + "; ".join(limited_failures)
+        )
 
     decision_path = root / decision_id.strip()
     decisions_root = (private / "decisions").resolve()
@@ -350,7 +369,9 @@ def propose_order(
             "participation_cap_pct": participation_text,
             "status": str(status["ticket_status"]),
             "pretrade_check": (
-                "PENDING" if policy["operation_mode"] == "LIVE" else "PAPER_ONLY"
+                "PENDING"
+                if policy["operation_mode"] in {"LIMITED_LIVE", "LIVE"}
+                else "PAPER_ONLY"
             ),
             "notes": "proposed by nightly operation; brokerage submission is human-only",
         }
@@ -364,7 +385,7 @@ def propose_order(
     selected["ticket_id"] = ticket_id
     selected["human_action"] = (
         "翌朝8:45-8:55にpretrade確認後、承認時のみ手入力"
-        if policy["operation_mode"] == "LIVE"
+        if policy["operation_mode"] in {"LIMITED_LIVE", "LIVE"}
         else "PAPER仮想注文の結果を翌夜に照合"
     )
     selected["decision_log_path"] = decision_id.strip()

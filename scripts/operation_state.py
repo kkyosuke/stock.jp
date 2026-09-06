@@ -219,10 +219,10 @@ def _normalized_source_config(
 def _normalized_policy(
     policy: dict[str, Any], template: dict[str, Any]
 ) -> dict[str, Any]:
-    if policy.get("schema_version") not in {"1.0", "1.1", "1.2", "1.3"}:
+    if policy.get("schema_version") not in {"1.0", "1.1", "1.2", "1.3", "1.4"}:
         return policy
     normalized = dict(policy)
-    normalized["schema_version"] = "1.3"
+    normalized["schema_version"] = "1.4"
     gates = policy.get("live_gates")
     evidence = policy.get("live_gate_evidence")
     normalized["live_gates"] = {
@@ -245,6 +245,11 @@ def _normalized_policy(
         normalized["live_gates"].pop(retired_gate, None)
         normalized["live_gate_evidence"].pop(retired_gate, None)
     normalized.setdefault("v04_holdout_promotion", False)
+    configured_limited = policy.get("limited_live")
+    normalized["limited_live"] = {
+        **template.get("limited_live", {}),
+        **(configured_limited if isinstance(configured_limited, dict) else {}),
+    }
     return normalized
 
 

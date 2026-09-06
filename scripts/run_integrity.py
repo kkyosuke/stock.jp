@@ -644,6 +644,34 @@ def _validate_orders(
             errors.append(f"order ticket already exists in an earlier run: {ticket_id}")
         if code in previous_codes:
             errors.append(f"code has an unreconciled earlier order: {code}")
+    if policy.get("operation_mode") == "LIMITED_LIVE":
+        limited = policy.get("limited_live", {})
+        risk_increasing = [
+            row
+            for row in rows
+            if row.get("action", "").strip().upper() in {"BUY", "ADD"}
+        ]
+        maximum_orders = limited.get("maximum_new_orders_per_run")
+        if not isinstance(maximum_orders, int) or len(risk_increasing) > maximum_orders:
+            errors.append("LIMITED_LIVE allows only one new order per run")
+        if limited.get("additional_purchases_enabled") is not True and any(
+            row.get("action", "").strip().upper() == "ADD" for row in rows
+        ):
+            errors.append("LIMITED_LIVE additional purchases are disabled")
+        capital = limited.get("capital_limit_jpy")
+        if isinstance(capital, (int, float)) and not isinstance(capital, bool):
+            for row in risk_increasing:
+                try:
+                    notional = float(row["limit_price"]) * float(
+                        row["quantity_private"]
+                    )
+                    declared = float(capital) * float(row["position_pct"]) / 100
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if notional > declared + 1:
+                    errors.append(
+                        "LIMITED_LIVE order notional exceeds its declared position percentage"
+                    )
     duplicate_ids = sorted({value for value in ids if value and ids.count(value) > 1})
     if duplicate_ids:
         errors.append(f"duplicate ticket_id: {', '.join(duplicate_ids)}")

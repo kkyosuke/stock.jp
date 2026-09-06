@@ -75,6 +75,10 @@ stock.jp/.venv/bin/python stock.jp/scripts/operation_bootstrap.py check
 
 稼働中の checkout は上書きしない。最新 `state.json`、成功 run、handoff、全台帳、未照合注文、private commit、public submodule commit を照合し、結果を private 側の LIVE gate evidence に記録する。別媒体の mirror は要求しない。GitHub を利用できない間は新しい注文を止め、復旧後に状態を再検証する。
 
+少額の実約定で運用手順を先に観察する場合は、通常LIVEの判定値を変えず
+`LIMITED_LIVE`を使う。資金上限、損失停止、追加購入禁止、1 run 1新規注文、手入力発注は
+[専用仕様](limited-live-v0.1.md)で別途fail-close判定する。
+
 ## 6. CI
 
 `.github/workflows/operation-tests.yml` は PR と main 更新時に、全単体テスト、Python compile、skill 構成、20営業日 simulation を実行する。CI は公開 fixture だけを使い、API key や `operations/private/` をアップロードしない。
