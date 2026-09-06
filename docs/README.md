@@ -6,9 +6,10 @@
 2. [運用ガバナンス](operations/operation-governance-v0.1.md)
 3. [運用状態・台帳](operations/operation-state-v0.2.md)
 4. [PAPER/LIVE 準備判定](operations/operation-readiness-v0.1.md)
-5. [LIVE 運用手順](operations/live-operation-playbook-v0.1.md)
-6. [LIVE gate 証跡の機械判定](operations/live-gate-evidence.md)
-7. [判断計算の自動化](operations/decision-assessment-automation-v0.1.md)
+5. [少額限定実運用 LIMITED_LIVE](operations/limited-live-v0.1.md)
+6. [LIVE 運用手順](operations/live-operation-playbook-v0.1.md)
+7. [LIVE gate 証跡の機械判定](operations/live-gate-evidence.md)
+8. [判断計算の自動化](operations/decision-assessment-automation-v0.1.md)
 
 ## 分類
 

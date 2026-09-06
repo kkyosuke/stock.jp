@@ -63,9 +63,9 @@
 ## 9. 人間が行うこと
 
 - [ ] `PAPER_PROPOSED` は仮想約定だけ記録し、証券会社へ入力しない
-- [ ] 昇格済み`LIVE`の場合だけ、翌営業日8:45〜8:55に `pretrade-check.md` を実施する
+- [ ] 昇格済み`LIMITED_LIVE`/`LIVE`の場合だけ、翌営業日8:45〜8:55に `pretrade-check.md` を実施する
 - [ ] `PROPOSED` の注文候補を承認、取消、または `WAIT` にする
-- [ ] 昇格済み`LIVE`で承認した注文だけを証券会社へ手入力する
+- [ ] 昇格済み`LIMITED_LIVE`/`LIVE`で承認した注文だけを証券会社へ手入力する
 - [ ] 約定後に `orders.csv` と `portfolio-register.csv` を更新する
 
 ## 10. 次回への引き継ぎ

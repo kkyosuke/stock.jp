@@ -31,11 +31,20 @@
 
 `LIVE` へ昇格しても発注権限は `HUMAN_ONLY` のままとする。夜間エージェントは翌営業日の注文候補を作成し、人間が注文前チェック後に証券会社へ入力する。
 
+### LIMITED_LIVE
+
+通常LIVE前の少額実約定は[LIMITED_LIVE](limited-live-v0.1.md)として分離する。
+専用資金上限、本人の累積損失停止、1 run 1新規注文、追加購入禁止を強制し、
+公式source coverage、clean-clone、個人checklistが合格した場合だけPAPERから昇格できる。
+この段階はpoint-in-time履歴、forward holdout、最終LIVE承認を完了したことにせず、
+通常LIVEへの自動昇格も行わない。
+
 ## 3. 夜間実行の行動制限
 
 | モード | 調査 | 判定 | 注文票 | 証券会社への入力 |
 |---|---|---|---|---|
 | `PAPER` | 実施 | 実施 | `PAPER_PROPOSED` | 禁止 |
+| `LIMITED_LIVE` | 実施 | 実施 | `PROPOSED`（1 run 1新規・追加禁止） | 人間だけ |
 | `LIVE` | 実施 | 実施 | `PROPOSED` | 人間だけ |
 | `PAUSED` | 取得漏れ・既存リスクだけ確認 | `WAIT`優先 | 作成禁止 | 禁止 |
 

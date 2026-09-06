@@ -2,6 +2,10 @@
 
 実資金への昇格条件は、文章上のチェックだけでなく `scripts/live_gate_evidence.py` で検証する。検証に失敗した条件や証跡が存在しない条件は、必ず未達として扱う。
 
+少額限定の実約定は通常LIVEと混ぜず、`scripts/limited_live.py`と
+[専用仕様](limited-live-v0.1.md)で判定する。回顧的diagnosticをforwardとして記録せず、
+通常LIVEの未完了gateもそのまま維持する。
+
 ## point-in-time 全母集団
 
 `point_in_time_full_universe_validation` は、次のコマンドが成功した場合だけ証跡を作成できる。

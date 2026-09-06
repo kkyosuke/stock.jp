@@ -165,7 +165,7 @@ def finalize_nightly_run(
     return {
         **result,
         "next_run_at_jst": next_run_at,
-        "wait_instruction": "次回夜間実行まで待機。LIVE注文候補だけ翌朝に人間が確認する。",
+        "wait_instruction": "次回夜間実行まで待機。LIMITED_LIVE/LIVE注文候補だけ翌朝に人間が確認する。",
     }
 
 

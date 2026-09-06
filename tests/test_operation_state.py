@@ -261,7 +261,7 @@ class OperationStateTest(unittest.TestCase):
         migrated = json.loads(policy_path.read_text(encoding="utf-8"))
 
         self.assertIn("operations/private/operation-policy.json", result["migrated"])
-        self.assertEqual(migrated["schema_version"], "1.3")
+        self.assertEqual(migrated["schema_version"], "1.4")
         self.assertNotIn("minimum_12_month_paper_trade", migrated["live_gates"])
         self.assertNotIn("twenty_day_shadow_run", migrated["live_gates"])
         self.assertNotIn(
@@ -287,9 +287,10 @@ class OperationStateTest(unittest.TestCase):
         migrated = json.loads(policy_path.read_text(encoding="utf-8"))
 
         self.assertIn("operations/private/operation-policy.json", result["migrated"])
-        self.assertEqual(migrated["schema_version"], "1.3")
+        self.assertEqual(migrated["schema_version"], "1.4")
         self.assertEqual(migrated["active_rule_version"], "v0.2")
         self.assertFalse(migrated["v04_holdout_promotion"])
+        self.assertIsNone(migrated["limited_live"]["capital_limit_jpy"])
 
     def test_migrates_backup_gate_to_private_repository_recovery(self) -> None:
         initialize_or_migrate_workspace(self.root)
@@ -308,7 +309,7 @@ class OperationStateTest(unittest.TestCase):
         initialize_or_migrate_workspace(self.root)
         migrated = json.loads(policy_path.read_text(encoding="utf-8"))
 
-        self.assertEqual(migrated["schema_version"], "1.3")
+        self.assertEqual(migrated["schema_version"], "1.4")
         self.assertTrue(migrated["live_gates"]["private_repository_recovery"])
         self.assertEqual(
             migrated["live_gate_evidence"]["private_repository_recovery"],
