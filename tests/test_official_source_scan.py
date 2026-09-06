@@ -30,6 +30,21 @@ class OfficialSourceScanTest(unittest.TestCase):
             self.root / "operations/templates",
         )
         initialize_or_migrate_workspace(self.root)
+        # The project default is no J-Quants.  These fixture tests opt in only
+        # to keep the dormant adapter covered without changing that default.
+        config_path = self.root / "operations/private/source-config.json"
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        config["jquants"].update(
+            {
+                "enabled": True,
+                "listed_master_enabled": True,
+                "daily_bars_enabled": True,
+                "financial_summary_enabled": True,
+                "earnings_calendar_enabled": True,
+                "trading_calendar_enabled": True,
+            }
+        )
+        config_path.write_text(json.dumps(config) + "\n", encoding="utf-8")
         portfolio = self.root / "operations/private/portfolio-register.csv"
         with portfolio.open(encoding="utf-8", newline="") as source:
             fields = next(csv.reader(source))
