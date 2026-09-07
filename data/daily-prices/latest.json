@@ -10,18 +10,18 @@
     "scope": "current domestic stocks",
     "count": 3707
   },
-  "latest_trading_date": "2026-09-04",
+  "latest_trading_date": "2026-09-07",
   "fetch": {
     "success_count": 3707,
     "error_count": 0,
     "error_codes": []
   },
   "latest_session": {
-    "date": "2026-09-04",
-    "file": "2026/2026-09-04.csv",
-    "sha256": "e7ffa5d8bba7f1b50fb532d73fae2d7acf43356f14ff0dc863f61d3074e5b185",
-    "quote_count": 3666,
-    "no_quote_count": 41,
+    "date": "2026-09-07",
+    "file": "2026/2026-09-07.csv",
+    "sha256": "c1fa98360110f881c0ca12420a322e82f68294477d73a175a0792150b760b01b",
+    "quote_count": 4,
+    "no_quote_count": 3703,
     "fetch_error_count": 0
   }
 }
