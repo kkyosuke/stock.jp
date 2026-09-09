@@ -32,28 +32,30 @@ class DailyStockPriceWorkflowTest(unittest.TestCase):
         for option in ("--auto", "--squash", "--delete-branch"):
             self.assertIn(option, self.text)
 
-    def test_app_authentication_triggers_required_pr_check(self) -> None:
-        app_token = self.text.index("- name: Create automation app token")
+    def test_pat_authentication_triggers_required_pr_check(self) -> None:
+        configuration = self.text.index("- name: Check automation PAT configuration")
         pull_request = self.text.index("- name: Create or update data pull request")
         auto_merge = self.text.index("- name: Enable auto-merge after successful validation")
         tests = self.text.index("- name: Run unit and integration tests before merge")
-        self.assertLess(tests, app_token)
-        self.assertLess(app_token, pull_request)
+        self.assertLess(configuration, tests)
+        self.assertLess(tests, pull_request)
         self.assertLess(pull_request, auto_merge)
-        self.assertIn("token: ${{ steps.app-token.outputs.token }}", self.text)
-        self.assertIn("GH_TOKEN: ${{ steps.app-token.outputs.token }}", self.text)
+        self.assertIn("token: ${{ secrets.AUTOMATION_PAT }}", self.text)
+        self.assertIn("GH_TOKEN: ${{ secrets.AUTOMATION_PAT }}", self.text)
         self.assertNotIn("gh workflow run operation-tests.yml", self.text)
         self.assertNotIn("token: ${{ github.token }}", self.text)
+        self.assertNotIn("create-github-app-token", self.text)
+        self.assertNotIn("AUTOMATION_APP_", self.text)
 
         operation_tests = (
             ROOT / ".github/workflows/operation-tests.yml"
         ).read_text(encoding="utf-8")
         self.assertIn("pull_request:", operation_tests)
 
-    def test_workflow_has_required_repository_permissions(self) -> None:
+    def test_workflow_keeps_github_token_read_only(self) -> None:
         self.assertIn("permissions:\n  contents: read", self.text)
-        self.assertIn("permission-contents: write", self.text)
-        self.assertIn("permission-pull-requests: write", self.text)
+        self.assertNotIn("contents: write", self.text)
+        self.assertNotIn("pull-requests: write", self.text)
         self.assertNotIn("actions: write", self.text)
         self.assertNotIn("id-token: write", self.text)
 
