@@ -60,6 +60,11 @@ def validate_summary(
         raise ScheduledUpdateError("latest session contains fetch errors")
     if quote_count + no_quote_count != universe_count:
         raise ScheduledUpdateError("latest session count does not match the universe")
+    if quote_count / universe_count < 0.98:
+        raise ScheduledUpdateError(
+            "latest session quote coverage is below 98% "
+            f"({quote_count}/{universe_count}); retry collection after prices are available"
+        )
 
     try:
         latest_date = date.fromisoformat(str(summary["latest_trading_date"]))

@@ -16,15 +16,23 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  actions: write
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   collect:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
+      - name: Check automation app configuration
+        env:
+          APP_CLIENT_ID: ${{ vars.AUTOMATION_APP_CLIENT_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.AUTOMATION_APP_PRIVATE_KEY }}
+        run: |
+          if [ -z "$APP_CLIENT_ID" ] || [ -z "$APP_PRIVATE_KEY" ]; then
+            echo '::error::Configure AUTOMATION_APP_CLIENT_ID and AUTOMATION_APP_PRIVATE_KEY; see docs/operations/daily-stock-price-actions-v0.1.md'
+            exit 1
+          fi
+
       - name: Check out repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -74,11 +82,21 @@ jobs:
           python -m compileall -q scripts tests
           python scripts/operation_smoke.py --days 20 --start-date 2026-09-01
 
+      # Mint after collection/tests: installation tokens expire after one hour.
+      - name: Create automation app token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.AUTOMATION_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AUTOMATION_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
       - name: Create or update data pull request
         id: data-pr
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
-          token: ${{ github.token }}
+          token: ${{ steps.app-token.outputs.token }}
           branch: automation/daily-stock-prices
           delete-branch: true
           commit-message: "data: update daily Japanese stock prices"
@@ -93,20 +111,10 @@ jobs:
           add-paths: |
             data/daily-prices
 
-      - name: Dispatch required operation tests
-        if: steps.data-pr.outputs.pull-request-number != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_BRANCH: automation/daily-stock-prices
-        run: |
-          gh workflow run operation-tests.yml \
-            --repo "$GITHUB_REPOSITORY" \
-            --ref "$PR_BRANCH"
-
       - name: Enable auto-merge after successful validation
         if: steps.data-pr.outputs.pull-request-number != ''
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PR_NUMBER: ${{ steps.data-pr.outputs.pull-request-number }}
         run: |
           gh pr merge "$PR_NUMBER" \

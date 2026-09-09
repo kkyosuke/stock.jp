@@ -32,24 +32,29 @@ class DailyStockPriceWorkflowTest(unittest.TestCase):
         for option in ("--auto", "--squash", "--delete-branch"):
             self.assertIn(option, self.text)
 
-    def test_created_pr_dispatches_required_check_before_auto_merge(self) -> None:
+    def test_app_authentication_triggers_required_pr_check(self) -> None:
+        app_token = self.text.index("- name: Create automation app token")
         pull_request = self.text.index("- name: Create or update data pull request")
-        dispatch = self.text.index("- name: Dispatch required operation tests")
         auto_merge = self.text.index("- name: Enable auto-merge after successful validation")
-        self.assertLess(pull_request, dispatch)
-        self.assertLess(dispatch, auto_merge)
-        self.assertIn("gh workflow run operation-tests.yml", self.text)
-        self.assertIn('--ref "$PR_BRANCH"', self.text)
+        tests = self.text.index("- name: Run unit and integration tests before merge")
+        self.assertLess(tests, app_token)
+        self.assertLess(app_token, pull_request)
+        self.assertLess(pull_request, auto_merge)
+        self.assertIn("token: ${{ steps.app-token.outputs.token }}", self.text)
+        self.assertIn("GH_TOKEN: ${{ steps.app-token.outputs.token }}", self.text)
+        self.assertNotIn("gh workflow run operation-tests.yml", self.text)
+        self.assertNotIn("token: ${{ github.token }}", self.text)
 
         operation_tests = (
             ROOT / ".github/workflows/operation-tests.yml"
         ).read_text(encoding="utf-8")
-        self.assertIn("workflow_dispatch:", operation_tests)
+        self.assertIn("pull_request:", operation_tests)
 
     def test_workflow_has_required_repository_permissions(self) -> None:
-        self.assertIn("actions: write", self.text)
-        self.assertIn("contents: write", self.text)
-        self.assertIn("pull-requests: write", self.text)
+        self.assertIn("permissions:\n  contents: read", self.text)
+        self.assertIn("permission-contents: write", self.text)
+        self.assertIn("permission-pull-requests: write", self.text)
+        self.assertNotIn("actions: write", self.text)
         self.assertNotIn("id-token: write", self.text)
 
     def test_workflow_installs_every_project_runtime_dependency(self) -> None:
