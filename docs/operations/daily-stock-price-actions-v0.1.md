@@ -17,19 +17,24 @@ chart endpointを銘柄ごとに呼び出す。JPXの現行`.xlsx`は`openpyxl`�
 
 ## 初回設定
 
-1. 自動更新用のGitHub Appを作成し、Repository permissionsの`Contents: Read and write`と
-   `Pull requests: Read and write`を付け、このrepositoryへinstallする。必須checkのbypass権限は付けない。
-2. `Settings > Secrets and variables > Actions`のVariablesに`AUTOMATION_APP_CLIENT_ID`
-   （AppのClient ID）、Secretsに`AUTOMATION_APP_PRIVATE_KEY`（Appで生成した秘密鍵の全文）を登録する。
-   秘密鍵はGitやログへ保存しない。未設定なら収集開始前に設定名を表示して失敗する。
+1. GitHubの`Settings > Developer settings > Personal access tokens > Fine-grained tokens`で
+   自動更新用PATを作成する。Resource ownerはrepository所有者、Repository accessは
+   `Only select repositories`でこのrepositoryだけを選び、Repository permissionsの
+   `Contents: Read and write`と`Pull requests: Read and write`を付ける。有効期限を設定する。
+2. repositoryの`Settings > Secrets and variables > Actions > New repository secret`で
+   名前を`AUTOMATION_PAT`、値を発行したPATとして登録する。PATはGit、チャット、ログへ保存しない。
+   未設定なら収集開始前にSecret名を表示して失敗する。
 3. 今回の初回データは`lookback_days=21`で取得する。将来Actionsから再構築する場合も、
    `daily-stock-prices`を`Run workflow`から同じ値で1回実行する。
 4. repository設定でauto-mergeを有効にし、mainの必須`test`を維持する。workflowはデータ検証、
    全test、compile、20日smokeが成功した場合だけ、作成したPRのsquash auto-mergeを有効にする。
 
-株価APIキーや長期PATは不要である。収集・検証はread-onlyの`GITHUB_TOKEN`で行い、PR作成と
-auto-mergeの設定にはGitHub Appの短命なinstallation tokenを使う。tokenは当該repositoryの
-Contents/Pull requestsだけに限定し、有効期間1時間を収集で消費しないよう検証後に発行する。
+収集・検証はread-onlyの`GITHUB_TOKEN`で行い、PATは設定確認、PR作成、auto-merge設定のstepで
+使用する。自動PRが変更するのは価格データだけなので、PATにWorkflowsの書込権限は不要である。
+PATの期限前に同じ権限で再発行し、`AUTOMATION_PAT`の値を更新する。失効や権限不足でPR作成が
+失敗した場合も、Secret更新後に同じworkflowを再実行できる。
+詳細は[PATの作成手順](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens)と
+[create-pull-requestの必要権限](https://github.com/peter-evans/create-pull-request#token)を参照する。
 
 ## 日次動作
 
@@ -46,7 +51,7 @@ operation smokeを同じjobで実行する。いずれかが失敗した場合�
 すべて成功し、差分がある場合だけPRを作成し、`--auto --squash`でmergeする。差分がない日は
 何もしない。
 
-GitHub Appで作成・更新したPRでは通常の`pull_request`イベントから`operation-tests`が起動する。
+専用PATで作成・更新したPRでは通常の`pull_request`イベントから`operation-tests`が起動する。
 必須`test`が成功してからauto-mergeするため、PR branchへの別途`workflow_dispatch`は行わない。
 標準`GITHUB_TOKEN`で作成したPRはチェック実行に承認を要求されるため、代替として使用しない。
 これは[GitHub公式のworkflow連鎖の仕様](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow)に従う。
