@@ -10,6 +10,7 @@ from urllib.error import URLError
 from scripts.daily_operation import complete_run, prepare_run
 from scripts.official_source_scan import (
     SOURCE_FIELDS,
+    SourceScanError,
     _append_sources,
     _request_json,
     scan_sources,
@@ -200,6 +201,69 @@ class OfficialSourceScanTest(unittest.TestCase):
         self.assertEqual(payload, {"results": []})
         self.assertEqual(mocked_urlopen.call_count, 2)
         mocked_sleep.assert_called_once()
+
+    @patch("scripts.official_source_scan.urlopen")
+    def test_rejected_key_answered_with_http_200_is_an_error(self, mocked_urlopen) -> None:
+        # EDINET answers an invalid or expired subscription key with HTTP 200 and
+        # a body whose StatusCode is 401. Reading only the HTTP status would turn
+        # a rejected request into a day that simply has no filings.
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = (
+            b'{"StatusCode": 401,"message": "Access denied due to invalid '
+            b'subscription key.Make sure to provide a valid key for an active '
+            b'subscription."}'
+        )
+        mocked_urlopen.return_value = response
+
+        with self.assertRaises(SourceScanError) as raised:
+            _request_json(
+                base_url="https://example.com",
+                path="documents.json",
+                params={},
+                headers={},
+                timeout=1,
+                backoff_seconds=0,
+            )
+
+        self.assertIn("401", str(raised.exception))
+
+    @patch("scripts.official_source_scan.urlopen")
+    def test_metadata_status_other_than_200_is_an_error(self, mocked_urlopen) -> None:
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = (
+            b'{"metadata": {"status": "404", "message": "Not Found"}}'
+        )
+        mocked_urlopen.return_value = response
+
+        with self.assertRaises(SourceScanError):
+            _request_json(
+                base_url="https://example.com",
+                path="documents.json",
+                params={},
+                headers={},
+                timeout=1,
+                backoff_seconds=0,
+            )
+
+    @patch("scripts.official_source_scan.urlopen")
+    def test_successful_metadata_with_no_filings_is_accepted(self, mocked_urlopen) -> None:
+        # A market holiday returns status 200 with an empty result set.
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = (
+            b'{"metadata": {"status": "200", "message": "OK"}, "results": []}'
+        )
+        mocked_urlopen.return_value = response
+
+        payload = _request_json(
+            base_url="https://example.com",
+            path="documents.json",
+            params={},
+            headers={},
+            timeout=1,
+            backoff_seconds=0,
+        )
+
+        self.assertEqual(payload["results"], [])
 
     def test_carried_critical_gap_keeps_scan_partial(self) -> None:
         prepared = self._prepare()
