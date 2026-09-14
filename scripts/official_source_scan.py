@@ -124,6 +124,24 @@ def _date_range(start: date, end: date) -> list[date]:
     return [start + timedelta(days=offset) for offset in range((end - start).days + 1)]
 
 
+def _payload_status(payload: dict[str, Any]) -> str | None:
+    """Return the response status carried inside a JSON body, when present.
+
+    EDINET answers an invalid or expired subscription key with HTTP 200 and a
+    body whose StatusCode is 401, so checking the HTTP status alone turns a
+    rejected request into a day that simply has no filings.
+    """
+
+    status = payload.get("StatusCode")
+    if status is None:
+        metadata = payload.get("metadata")
+        if isinstance(metadata, dict):
+            status = metadata.get("status")
+    if status is None:
+        return None
+    return str(status).strip()
+
+
 def _request_json(
     *,
     base_url: str,
@@ -160,6 +178,11 @@ def _request_json(
         time_module.sleep(backoff_seconds * (2**attempt))
     if not isinstance(payload, dict):
         raise SourceScanError(f"unexpected JSON shape from {public_url}")
+    status = _payload_status(payload)
+    if status is not None and status != "200":
+        message = str(payload.get("message") or "").strip()
+        detail = f": {message}" if message else ""
+        raise SourceScanError(f"status {status} in body from {public_url}{detail}")
     return payload
 
 
